@@ -23,7 +23,7 @@ struct ModelOption: Identifiable {
 /// Downloads model files into the Models folder, with progress for the settings window.
 final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published private(set) var progress: [String: Double] = [:]  // file name -> 0...1 while downloading
-    @Published var failure: String?
+    @Published private(set) var failures: [String: String] = [:]  // file name -> why it stopped
     var onInstalled: ((String) -> Void)?
 
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
@@ -31,7 +31,8 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
 
     func start(_ m: ModelOption) {
         guard tasks[m.file] == nil else { return }
-        failure = nil
+        failures[m.file] = nil
+        Log.d("download start \(m.file)")
         let t = session.downloadTask(with: m.url)
         t.taskDescription = m.file
         tasks[m.file] = t
@@ -55,19 +56,25 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         let ok = (t.response as? HTTPURLResponse)?.statusCode == 200
         let size = (try? location.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         // An error page is small; a model is hundreds of megabytes.
-        guard ok, size > 200_000_000 else { failure = "The download of \(file) did not complete."; return }
+        guard ok, size > 200_000_000 else {
+            let code = (t.response as? HTTPURLResponse)?.statusCode ?? 0
+            Log.d("download bad \(file) http=\(code) size=\(size)")
+            failures[file] = "The server did not send the model (HTTP \(code))."
+            return
+        }
         let dest = Settings.modelsDir.appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         do {
             try FileManager.default.moveItem(at: location, to: dest)
             onInstalled?(file)
-        } catch { failure = error.localizedDescription }
+        } catch { failures[file] = error.localizedDescription }
     }
 
     func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let file = task.taskDescription else { return }
         tasks[file] = nil
         progress[file] = nil
-        if let error, (error as NSError).code != NSURLErrorCancelled { failure = error.localizedDescription }
+        Log.d("download end \(file) error=\(error.map { "\(($0 as NSError).domain) \(($0 as NSError).code) \($0.localizedDescription)" } ?? "none")")
+        if let error, (error as NSError).code != NSURLErrorCancelled { failures[file] = error.localizedDescription }
     }
 }

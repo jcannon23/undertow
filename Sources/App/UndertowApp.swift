@@ -74,7 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         let info: String
         switch coordinator.modelState {
-        case .missing: info = "No model installed"
+        case .missing:
+            let p = coordinator.downloader.progress.values.first
+            info = p.map { "Downloading model… \(Int($0 * 100))%" } ?? "No model installed"
         case .loading: info = "Loading model…"
         case .ready(let n): info = n.replacingOccurrences(of: ".gguf", with: "")
         case .failed(let n): info = "Could not load \(n)"
@@ -168,7 +170,6 @@ struct SettingsView: View {
             }
             Section("Model") {
                 ForEach(ModelOption.catalog) { m in ModelRow(model: m, coordinator: coordinator, downloader: coordinator.downloader, settings: settings) }
-                if let f = coordinator.downloader.failure { Text(f).font(.footnote).foregroundStyle(.red) }
                 LabeledContent("Status") { Text(modelStatus).foregroundStyle(.secondary) }
                 Text("Models run entirely on this Mac and are released from memory after 20 idle minutes or when memory runs short. Undertow uses the largest installed model that fits comfortably unless you choose one.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -291,6 +292,9 @@ private struct ModelRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title)
                 Text(model.note).font(.footnote).foregroundStyle(.secondary)
+                if let why = downloader.failures[model.file] {
+                    Text("Download failed: \(why)").font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
