@@ -25,6 +25,18 @@ xcodegen generate >/dev/null
 xcodebuild -project Undertow.xcodeproj -scheme Undertow -configuration Release -derivedDataPath build/dd \
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" build | grep -E " error|BUILD" || true
 APP=build/dd/Build/Products/Release/Undertow.app
+
+# Distribution signing, inside out: Sparkle's helpers, the framework, then the app. Xcode's own
+# pass leaves helpers with their upstream signature, no secure timestamp, and a debug entitlement
+# on the app; the notary service rejects all three.
+sign() { codesign --force --options runtime --timestamp --sign "$IDENTITY" "$@"; }
+SP="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+sign "$SP/XPCServices/Installer.xpc"
+sign --preserve-metadata=entitlements "$SP/XPCServices/Downloader.xpc"
+sign "$SP/Autoupdate"
+sign "$SP/Updater.app"
+sign "$APP/Contents/Frameworks/Sparkle.framework"
+sign "$APP"
 codesign --verify --deep --strict "$APP"
 
 mkdir -p build/release build/staging
@@ -40,7 +52,7 @@ if [ "$FULL" = yes ]; then
   ditto "$APP" build/staging/Undertow.app
   mkdir -p build/staging/Undertow.app/Contents/Resources/Models
   cp -c "$MODEL" build/staging/Undertow.app/Contents/Resources/Models/
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" build/staging/Undertow.app
+  sign build/staging/Undertow.app
   ln -sf /Applications build/staging/Applications
   DMG="build/Undertow-$VERSION-Full.dmg"
   hdiutil create -volname "Undertow" -srcfolder build/staging -ov -format UDZO "$DMG" >/dev/null
