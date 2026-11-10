@@ -16,6 +16,8 @@ OWNER=jcannon23
 SPARKLE=build/dd/SourcePackages/artifacts/sparkle/Sparkle/bin
 IDENTITY="Developer ID Application"
 PROFILE=AC_PASSWORD
+# /usr/local/bin/gh on this Mac is an Intel binary that cannot run; prefer the Homebrew one.
+GH=/opt/homebrew/bin/gh; [ -x "$GH" ] || GH=gh
 MODEL="$HOME/Library/Application Support/Undertow/Models/gemma-4-E2B-it-Q4_0.gguf"
 
 [ -z "$(git status --porcelain)" ] || { echo "Commit your changes first."; exit 1; }
@@ -63,7 +65,7 @@ if [ "$FULL" = yes ]; then
 fi
 
 # Update feed: lives in the public releases repo next to the downloads.
-[ -d build/releases-repo ] || gh repo clone "$OWNER/undertow-releases" build/releases-repo
+[ -d build/releases-repo ] || "$GH" repo clone "$OWNER/undertow-releases" build/releases-repo
 git -C build/releases-repo pull -q
 [ -f build/releases-repo/appcast.xml ] && cp build/releases-repo/appcast.xml build/release/
 "$SPARKLE/generate_appcast" --account undertow \
@@ -71,7 +73,7 @@ git -C build/releases-repo pull -q
 cp build/release/appcast.xml build/releases-repo/appcast.xml
 
 if [ "$DRY" = yes ]; then echo "Dry run: built $ZIP and appcast, published nothing."; exit 0; fi
-gh release create "v$VERSION" "$ZIP" --repo "$OWNER/undertow-releases" --title "Undertow $VERSION" --notes "Undertow $VERSION"
+"$GH" release create "v$VERSION" "$ZIP" --repo "$OWNER/undertow-releases" --title "Undertow $VERSION" --notes "Undertow $VERSION"
 git -C build/releases-repo add appcast.xml
 git -C build/releases-repo commit -qm "Undertow $VERSION"
 git -C build/releases-repo push -q
