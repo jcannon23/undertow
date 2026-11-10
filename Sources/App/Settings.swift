@@ -48,6 +48,19 @@ final class Settings: ObservableObject {
         return true
     }
 
+    /// The full installer ships a model inside the app. Move it out to our data folder on first
+    /// launch so that small app-only updates never have to carry it (an APFS clone: instant, no
+    /// extra disk).
+    static func adoptBundledModels() {
+        guard let dir = Bundle.main.resourceURL?.appendingPathComponent("Models"),
+            let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return }
+        for f in files where f.pathExtension == "gguf" {
+            let dest = modelsDir.appendingPathComponent(f.lastPathComponent)
+            if !FileManager.default.fileExists(atPath: dest.path) { try? FileManager.default.copyItem(at: f, to: dest) }
+        }
+    }
+
     /// Model files on disk, largest (best) first.
     static func installedModels() -> [URL] {
         let fm = FileManager.default

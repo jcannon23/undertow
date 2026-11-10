@@ -10,6 +10,7 @@ final class Coordinator: ObservableObject {
     let engine = LlamaEngine()
     let style = StyleStore()
     let tap = KeyTap()
+    let downloader = ModelDownloader()
     private let reader = FocusReader()
     private let observer = FocusObserver()
     private let overlay = GhostOverlay()
@@ -69,6 +70,11 @@ final class Coordinator: ObservableObject {
         p.setEventHandler { [weak self] in self?.sleepModel() }
         p.resume()
         pressure = p
+        downloader.onInstalled = { [weak self] _ in
+            guard let self else { return }
+            self.objectWillChange.send()
+            if !self.ready { self.loadModel() }
+        }
         if Log.on { engine.trace = { Log.d("engine " + $0) } }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             self?.harvest()
@@ -76,7 +82,10 @@ final class Coordinator: ObservableObject {
         }
         refreshLM()
         refreshTrust()
+        Settings.adoptBundledModels()
         loadModel()
+        // Slim install with no model anywhere: fetch the recommended one without being asked.
+        if modelState == .missing { downloader.start(ModelOption.catalog[0]) }
     }
 
     /// Hands the engine a fresh snapshot of everything learned about this user's writing.

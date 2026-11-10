@@ -4,5 +4,13 @@
 <dict>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/jcannon23/undertow-releases/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>VpsLSPg8kCuU2vt+Oah9j7dx7Z6g065Xr4RB/PZRDCU=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

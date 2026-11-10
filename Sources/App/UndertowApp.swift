@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import ServiceManagement
+import Sparkle
 import SwiftUI
 
 @main
@@ -20,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status: NSStatusItem!
     private var window: NSWindow?
     private var trustTimer: Timer?
+    /// Sparkle: checks the release feed daily and installs signed updates.
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ note: Notification) {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -83,6 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let prefs = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         prefs.target = self
         menu.addItem(prefs)
+        let update = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        update.target = updater
+        menu.addItem(update)
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        menu.addItem(disabled("Version \(v)"))
         menu.addItem(NSMenuItem(title: "Quit Undertow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
@@ -159,16 +167,10 @@ struct SettingsView: View {
                 LabeledContent("Dismiss") { Keys(["esc"]) }
             }
             Section("Model") {
-                Picker("Model", selection: settings.$model) {
-                    Text("Automatic").tag("")
-                    ForEach(Settings.installedModels(), id: \.lastPathComponent) { u in
-                        Text("\(u.deletingPathExtension().lastPathComponent)  ·  \(ByteCountFormatter.string(fromByteCount: Int64(Settings.size(u)), countStyle: .file))")
-                            .tag(u.lastPathComponent)
-                    }
-                }
-                .onChange(of: settings.model) { _, _ in coordinator.loadModel() }
+                ForEach(ModelOption.catalog) { m in ModelRow(model: m, coordinator: coordinator, downloader: coordinator.downloader, settings: settings) }
+                if let f = coordinator.downloader.failure { Text(f).font(.footnote).foregroundStyle(.red) }
                 LabeledContent("Status") { Text(modelStatus).foregroundStyle(.secondary) }
-                Text("Runs entirely on this Mac. The model is released from memory after 20 idle minutes or when memory runs short.")
+                Text("Models run entirely on this Mac and are released from memory after 20 idle minutes or when memory runs short. Undertow uses the largest installed model that fits comfortably unless you choose one.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Writing help") {
@@ -245,7 +247,7 @@ struct SettingsView: View {
 
     private var modelStatus: String {
         switch coordinator.modelState {
-        case .missing: return "No model in the Models folder"
+        case .missing: return "Download a model to begin"
         case .loading: return "Loading…"
         case .ready: return "Ready"
         case .failed: return "Failed to load"
@@ -255,6 +257,42 @@ struct SettingsView: View {
 
     private func appName(_ id: String) -> String {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { FileManager.default.displayName(atPath: $0.path) } ?? id
+    }
+}
+
+/// One model: download it, watch it arrive, or choose it.
+private struct ModelRow: View {
+    let model: ModelOption
+    @ObservedObject var coordinator: Coordinator
+    @ObservedObject var downloader: ModelDownloader
+    @ObservedObject var settings: Settings
+
+    private var installed: Bool { FileManager.default.fileExists(atPath: Settings.modelsDir.appendingPathComponent(model.file).path) }
+
+    var body: some View {
+        LabeledContent {
+            if let p = downloader.progress[model.file] {
+                HStack {
+                    ProgressView(value: p).frame(width: 90)
+                    Text("\(Int(p * 100))%").monospacedDigit().foregroundStyle(.secondary)
+                    Button("Cancel") { downloader.cancel(model.file) }
+                }
+            } else if installed {
+                let active = coordinator.modelState == .ready(model.file)
+                if active {
+                    Label("In use", systemImage: "checkmark").foregroundStyle(.secondary)
+                } else {
+                    Button("Use") { settings.model = model.file; coordinator.loadModel() }
+                }
+            } else {
+                Button("Download \(String(format: "%.1f", model.approxGB)) GB") { downloader.start(model) }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.title)
+                Text(model.note).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
