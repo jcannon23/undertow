@@ -4,8 +4,8 @@
 #
 #   Tools/release.sh 0.2.0 [--full] [--dry-run]
 #
-# One-time setup: a notarytool keychain profile named "undertow-notary"
-#   xcrun notarytool store-credentials undertow-notary --key <AuthKey.p8> --key-id <ID> --issuer <ISSUER>
+# Uses the notarytool keychain profile "AC_PASSWORD" (shared with other projects). To create one:
+#   xcrun notarytool store-credentials AC_PASSWORD --key <AuthKey.p8> --key-id <ID> --issuer <ISSUER>
 set -eu
 cd "$(dirname "$0")/.."
 VERSION="${1:?usage: Tools/release.sh <version> [--full] [--dry-run]}"
@@ -15,7 +15,7 @@ BUILD=$(git rev-list --count HEAD)
 OWNER=jcannon23
 SPARKLE=build/dd/SourcePackages/artifacts/sparkle/Sparkle/bin
 IDENTITY="Developer ID Application"
-PROFILE=undertow-notary
+PROFILE=AC_PASSWORD
 MODEL="$HOME/Library/Application Support/Undertow/Models/gemma-4-E2B-it-Q4_0.gguf"
 
 [ -z "$(git status --porcelain)" ] || { echo "Commit your changes first."; exit 1; }
