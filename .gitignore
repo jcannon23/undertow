@@ -1,0 +1,5 @@
+Vendor/llama.cpp/
+build/
+*.xcodeproj
+.DS_Store
+DerivedData/
