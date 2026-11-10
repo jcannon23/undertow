@@ -44,7 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateIcon() {
         let on = settings.enabled && coordinator.trusted
-        let img = NSImage(systemSymbolName: "water.waves", accessibilityDescription: "Undertow")
+        let img = NSImage(named: "MenuBarIcon") ?? NSImage(systemSymbolName: "character.cursor.ibeam", accessibilityDescription: "Undertow")
+        img?.size = NSSize(width: 18, height: 18)
+        img?.accessibilityDescription = "Undertow"
         img?.isTemplate = true
         status.button?.image = img
         status.button?.appearsDisabled = !on
@@ -172,13 +174,14 @@ struct SettingsView: View {
             Section("Writing help") {
                 Toggle("Offer fixes for typos", isOn: settings.$typoFix)
                 Toggle("Learn my writing style", isOn: settings.$learnStyle)
-                LabeledContent("Remembered passages") {
+                    .onChange(of: settings.learnStyle) { _, _ in coordinator.refreshLM() }
+                LabeledContent("Learned so far") {
                     HStack {
-                        Text("\(learned)").foregroundStyle(.secondary)
-                        Button("Erase") { coordinator.style.erase(); learned = 0 }.disabled(learned == 0)
+                        Text(learnedSummary).foregroundStyle(.secondary)
+                        Button("Erase") { coordinator.style.erase(); coordinator.refreshLM(); learned = 0 }.disabled(learned == 0 && coordinator.style.feedbackTotals.shown == 0)
                     }
                 }
-                Text("Passages you type are kept encrypted on this Mac to match your vocabulary and phrasing. Anything that looks like a password, key or card number is never stored.")
+                Text("Undertow keeps passages you type, your names and jargon, the words you tend to follow with, and which suggestions you take or type past. All of it stays encrypted on this Mac. Anything that looks like a password, key or card number is never stored.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Where") {
@@ -231,6 +234,13 @@ struct SettingsView: View {
             }
             .padding(.vertical, 4)
         }
+    }
+
+    private var learnedSummary: String {
+        let f = coordinator.style.feedbackTotals
+        var parts = ["\(learned) passages", "\(coordinator.style.vocabularyCount) personal words"]
+        if f.shown > 0 { parts.append("\(Int(100 * Double(f.taken) / Double(f.shown)))% of \(f.shown) suggestions taken") }
+        return parts.joined(separator: " · ")
     }
 
     private var modelStatus: String {

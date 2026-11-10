@@ -15,8 +15,10 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Sources/App
+      - path: Sources/App
+        excludes: [Info.plist]
       - Sources/Engine
+      - Resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.undertow.Undertow
@@ -46,6 +48,7 @@ targets:
           - -lc++
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_FILE: Sources/App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Undertow
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity

@@ -19,6 +19,8 @@ let maxTokens = Int(opt("--max-tokens") ?? "20")!
 let limit = Int(opt("--limit") ?? "999")!
 let one = opt("--one")
 let appName = opt("--app") ?? ""
+let personalArg = opt("--personal")  // comma-separated words to boost
+let nextArg = opt("--next")  // word:delta,word:delta for the first predicted word
 let verbose = flag("--verbose")
 let showTemplate = flag("--template")
 guard let modelPath = args.first else { print("usage: bench <model.gguf> [options]"); exit(2) }
@@ -30,6 +32,24 @@ print("loaded \(engine.modelName) in \(Int(Date().timeIntervalSince(tLoad) * 100
 if showTemplate { print(engine.chatTemplate()); engine.unload(); exit(0) }
 
 let family = engine.family
+// --personal "Kavitha:5,the:400"  (word:count; words not in a tiny common list count as unusual)
+// --next "best>James:1.0"         (prev>word:probability)   --reject "should>probably"
+var lm = PersonalLM()
+let common: Set<String> = ["the", "they", "then", "that", "this", "keep", "kitchen", "know", "kind"]
+for item in (personalArg ?? "").split(separator: ",") {
+    let kv = item.split(separator: ":")
+    lm.words.append(.init(text: String(kv[0]), count: Int(kv[1])!, unusual: !common.contains(String(kv[0]))))
+}
+for item in (nextArg ?? "").split(separator: ",") {
+    let a = item.split(separator: ">"), kv = a[1].split(separator: ":")
+    lm.followers[String(a[0]), default: []].append((String(kv[0]), Float(kv[1])!))
+}
+for item in (opt("--reject") ?? "").split(separator: ",") {
+    let a = item.split(separator: ">")
+    lm.rejected[String(a[0]), default: []].insert(String(a[1]))
+}
+engine.setPersonalLM(lm)
+if verbose { engine.trace = { print("  ·", $0) } }
 func request(_ before: String) -> Completion {
     guard let (stem, cons) = Prompt.split(before) else { return Completion(done: true) }
     var r = CompletionRequest()

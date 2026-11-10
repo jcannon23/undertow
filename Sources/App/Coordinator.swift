@@ -40,6 +40,8 @@ final class Coordinator: ObservableObject {
     private var rereadWanted = false
     private var family = "gemma"
     private var promptStyle = Prompt.Style.chat
+    /// The suggestion currently on screen, until we learn whether the user wanted it.
+    private var pending: (prev: String, word: String, left: Int, confidence: Float, app: String, shown: Date)?
     private var idleTimer: Timer?
     private var pressure: DispatchSourceMemoryPressure?
 
@@ -68,8 +70,27 @@ final class Coordinator: ObservableObject {
         p.resume()
         pressure = p
         if Log.on { engine.trace = { Log.d("engine " + $0) } }
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.harvest()
+            self?.style.save()
+        }
+        refreshLM()
         refreshTrust()
         loadModel()
+    }
+
+    /// Hands the engine a fresh snapshot of everything learned about this user's writing.
+    func refreshLM() {
+        engine.setPersonalLM(settings.learnStyle ? style.personalLM() : PersonalLM())
+    }
+
+    /// The user looked at a suggestion and took it, or typed past it. Both are lessons.
+    private func resolve(taken: Bool) {
+        guard let p = pending else { return }
+        pending = nil
+        guard settings.learnStyle, taken || Date().timeIntervalSince(p.shown) > 0.25 else { return }  // too fast to have read it
+        Log.d("feedback \(taken ? "taken" : "rejected") \(p.prev)>\(p.word) p=\(p.confidence)")
+        if style.record(app: p.app, confidence: p.confidence, taken: taken, prev: p.prev, word: p.word) { refreshLM() }
     }
 
     /// Re-checks Accessibility permission and (re)starts the key tap once granted.
@@ -131,6 +152,7 @@ final class Coordinator: ObservableObject {
             }
         }
         if code == 53, overlay.visible {  // Esc
+            resolve(taken: false)
             clearGhost()
             suppressed = true
             return true
@@ -177,9 +199,14 @@ final class Coordinator: ObservableObject {
             ghost.removeFirst(s.count)
             overlay.advance(typed: s, remaining: ghost)
             if ghost.isEmpty { caretStale = true }
+            if pending != nil {
+                pending!.left -= s.count
+                if pending!.left <= 0 { resolve(taken: true) }  // typed the suggested word out by hand
+            }
             if wordCount(ghost) < 3 { predict() }
             return
         }
+        if kind == .completion, !ghost.isEmpty { resolve(taken: false) }
         textChanged()
         if settings.typoFix, let f = Typo.check(before) { showFix(f) }
     }
@@ -298,6 +325,7 @@ final class Coordinator: ObservableObject {
         guard settings.learnStyle, keysInField >= 25, let s = snap, !s.secure, !before.isEmpty else { return }
         keysInField = 0
         style.add(before, app: s.bundleID)
+        refreshLM()
     }
 
     // MARK: predicting
@@ -311,6 +339,7 @@ final class Coordinator: ObservableObject {
         r.stem = stem
         r.constraint = cons
         r.maxTokens = settings.maxTokens
+        if settings.learnStyle { r.minFirstProb = style.minConfidence(app: s.bundleID) }
         let base = before
         let extending = !ghost.isEmpty
         engine.complete(r) { [weak self] c in
@@ -331,6 +360,15 @@ final class Coordinator: ObservableObject {
         }
         kind = .completion
         ghost = text
+        if c.done, !extending, typedSince.isEmpty, let s = snap {
+            // Remember what we offered, keyed by the word before it, to learn from the outcome.
+            let partial = String(base.reversed().prefix { !$0.isWhitespace }.reversed())
+            let first = Prompt.nextWord(text)
+            let prevWord = base.dropLast(partial.count).split(whereSeparator: \.isWhitespace).last ?? ""
+            pending = (partial.isEmpty ? StyleStore.wordKey(prevWord) : "",
+                first.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .punctuationCharacters),
+                first.count, c.confidence, s.bundleID, Date())
+        }
         Log.d("ghost \(c.done ? "final" : "part") \(Int(c.ms))ms p=\(c.confidence) ⟦\(text)⟧ stale=\(caretStale)")
         render()
     }
@@ -357,6 +395,7 @@ final class Coordinator: ObservableObject {
     }
 
     private func clearGhost() {
+        pending = nil
         engine.cancel()
         ghost = ""
         fix = nil
@@ -373,6 +412,7 @@ final class Coordinator: ObservableObject {
         let piece = all ? ghost : Prompt.nextWord(ghost)
         guard !piece.isEmpty else { return }
         Log.d("accept ⟦\(piece)⟧")
+        resolve(taken: true)
         Typer.type(piece)
         lastInput = Date()
         keysInField += 1

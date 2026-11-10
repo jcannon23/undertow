@@ -9,9 +9,22 @@ import Security
 final class StyleStore {
     struct Snippet: Codable { var text: String; var app: String; var date: Date }
 
+    /// Everything learned, as one encrypted blob.
+    private struct Blob: Codable {
+        var snippets: [Snippet] = []
+        /// previous word -> suggested word -> times the user saw it there and typed something else
+        var rejections: [String: [String: Int]] = [:]
+        /// app (or "*") -> 10 confidence buckets of [shown, taken]
+        var calibration: [String: [Int]] = [:]
+    }
+
     private var snippets: [Snippet] = []
+    private var rejections: [String: [String: Int]] = [:]
+    private var calibration: [String: [Int]] = [:]
+    private var unusualCache: [String: Bool] = [:]
+    private var saveTimer: Timer?
     private let file: URL
-    private let maxSnippets = 400
+    private let maxSnippets = 1500
     private lazy var key: SymmetricKey? = Self.loadKey()
 
     init() {
@@ -34,7 +47,120 @@ final class StyleStore {
 
     func erase() {
         snippets = []
+        rejections = [:]
+        calibration = [:]
+        saveTimer?.invalidate()
         try? FileManager.default.removeItem(at: file)
+    }
+
+    // MARK: personal language model
+
+    static func wordKey(_ s: Substring) -> String {
+        s.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" }
+    }
+
+    private static func tokens(_ s: String) -> [Substring] {
+        s.split { !($0.isLetter || $0.isNumber || $0 == "'") }
+    }
+
+    /// Counts over everything remembered. Main thread (uses the system spell checker to tell
+    /// names and jargon from ordinary words).
+    func personalLM() -> PersonalLM {
+        var uni: [String: Int] = [:]
+        var prevCount: [String: Int] = [:]
+        var pairs: [String: [String: Int]] = [:]
+        for s in snippets {
+            var prev = ""
+            for w in Self.tokens(s.text) {
+                uni[String(w), default: 0] += 1
+                if !prev.isEmpty {
+                    prevCount[prev, default: 0] += 1
+                    pairs[prev, default: [:]][String(w), default: 0] += 1
+                }
+                prev = Self.wordKey(w)
+            }
+        }
+        var lm = PersonalLM()
+        let checker = NSSpellChecker.shared
+        for (w, c) in uni.sorted(by: { $0.value > $1.value }).prefix(4000) {
+            var unusual = false
+            // Seen once could be a typo; twice is vocabulary.
+            if c >= 2, w.count >= 3, w.contains(where: \.isLetter) {
+                if let known = unusualCache[w] { unusual = known } else {
+                    // Not in the dictionary, or a capitalised word never seen in lowercase
+                    // (a proper noun the dictionary happens to know, like a product name).
+                    let proper = w.first!.isUppercase && w != w.uppercased() && uni[w.lowercased()] == nil
+                    unusual = proper || checker.checkSpelling(of: w, startingAt: 0).location != NSNotFound
+                    unusualCache[w] = unusual
+                }
+            }
+            lm.words.append(.init(text: w, count: c, unusual: unusual))
+        }
+        for (prev, nexts) in pairs {
+            let total = Float(prevCount[prev] ?? 1)
+            let trust = min(1, total / 4)  // a habit seen once or twice is not yet a habit
+            let list = nexts.filter { $0.value >= 2 }.map { (word: $0.key, p: Float($0.value) / total * trust) }
+                .filter { $0.p >= 0.08 }.sorted { $0.p > $1.p }.prefix(6)
+            if !list.isEmpty { lm.followers[prev] = Array(list) }
+        }
+        for (prev, words) in rejections {
+            let no = Set(words.filter { $0.value >= 2 }.keys)
+            if !no.isEmpty { lm.rejected[prev] = no }
+        }
+        return lm
+    }
+
+    var vocabularyCount: Int { unusualCache.values.filter { $0 }.count }
+
+    // MARK: feedback
+
+    /// One suggestion was looked at and either taken or typed past.
+    /// Returns true when this changed what the personal model should say.
+    @discardableResult
+    func record(app: String, confidence: Float, taken: Bool, prev: String, word: String) -> Bool {
+        let b = min(9, max(0, Int(confidence * 10)))
+        for key in [app, "*"] {
+            var row = calibration[key] ?? [Int](repeating: 0, count: 20)
+            row[b * 2] += 1
+            if taken { row[b * 2 + 1] += 1 }
+            calibration[key] = row
+        }
+        var changed = false
+        if !prev.isEmpty, !word.isEmpty {
+            let before = rejections[prev]?[word] ?? 0
+            let after = taken ? 0 : before + 1
+            if after != before {
+                if after == 0 { rejections[prev]?[word] = nil } else { rejections[prev, default: [:]][word] = after }
+                changed = (before >= 2) != (after >= 2)
+            }
+            if rejections.count > 3000 { rejections.removeValue(forKey: rejections.keys.randomElement()!) }
+        }
+        saveSoon()
+        return changed
+    }
+
+    /// Below this first-word confidence, this user (in this app) practically never takes the
+    /// suggestion, so showing it is just noise. Needs real evidence before it hides anything.
+    func minConfidence(app: String) -> Float {
+        let own = calibration[app] ?? []
+        let row = own.enumerated().filter { $0.offset % 2 == 0 }.reduce(0) { $0 + $1.element } >= 200 ? own : (calibration["*"] ?? [])
+        guard row.count == 20 else { return 0 }
+        var b = 0
+        while b < 6, row[b * 2] >= 30, Float(row[b * 2 + 1]) / Float(row[b * 2]) < 0.08 { b += 1 }
+        return Float(b) / 10
+    }
+
+    /// (shown, taken) across all apps: for the settings window.
+    var feedbackTotals: (shown: Int, taken: Int) {
+        let row = calibration["*"] ?? []
+        var s = 0, t = 0
+        for (i, v) in row.enumerated() { if i % 2 == 0 { s += v } else { t += v } }
+        return (s, t)
+    }
+
+    private func saveSoon() {
+        guard saveTimer?.isValid != true else { return }
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in self?.save() }
     }
 
     /// Up to `limit` snippets, preferring the same app and overlapping vocabulary.
@@ -80,14 +206,21 @@ final class StyleStore {
     private func load() {
         guard let key, let data = try? Data(contentsOf: file),
             let box = try? AES.GCM.SealedBox(combined: data),
-            let plain = try? AES.GCM.open(box, using: key),
-            let list = try? JSONDecoder().decode([Snippet].self, from: plain)
+            let plain = try? AES.GCM.open(box, using: key)
         else { return }
-        snippets = list
+        if let b = try? JSONDecoder().decode(Blob.self, from: plain) {
+            snippets = b.snippets
+            rejections = b.rejections
+            calibration = b.calibration
+        } else if let list = try? JSONDecoder().decode([Snippet].self, from: plain) {
+            snippets = list  // first version stored passages only
+        }
     }
 
-    private func save() {
-        guard let key, let plain = try? JSONEncoder().encode(snippets),
+    func save() {
+        saveTimer?.invalidate()
+        let blob = Blob(snippets: snippets, rejections: rejections, calibration: calibration)
+        guard let key, let plain = try? JSONEncoder().encode(blob),
             let box = try? AES.GCM.seal(plain, using: key), let data = box.combined
         else { return }
         try? data.write(to: file, options: [.atomic, .completeFileProtection])
