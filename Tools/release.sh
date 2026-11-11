@@ -87,7 +87,8 @@ git -C build/releases-repo pull -q
 cp build/release/appcast.xml build/releases-repo/appcast.xml
 
 if [ "$DRY" = yes ]; then echo "Dry run: built $ZIP and appcast, published nothing."; exit 0; fi
-"$GH" release create "v$VERSION" "$ZIP" --repo "$OWNER/undertow-releases" --title "Undertow $VERSION" --notes "Undertow $VERSION"
+# The appcast also points at delta files for this build; ship them or those links 404.
+"$GH" release create "v$VERSION" "$ZIP" $(ls build/release/Undertow"$BUILD"-*.delta 2>/dev/null) --repo "$OWNER/undertow-releases" --title "Undertow $VERSION" --notes "Undertow $VERSION"
 git -C build/releases-repo add appcast.xml
 git -C build/releases-repo commit -qm "Undertow $VERSION"
 git -C build/releases-repo push -q
