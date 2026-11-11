@@ -31,6 +31,7 @@ enum Prompt {
         var title = ""
         var samples: [String] = []  // snippets of the user's own earlier writing
         var after = ""  // text following the caret
+        var instructions = ""  // the user's own note about who they are and how they write
     }
 
     /// Everything that precedes the user's text. Must stay byte-stable while the user types in
@@ -48,6 +49,7 @@ enum Prompt {
             s += ". Predict the words this same person types next. Stay in their voice, person and "
                 + "language. Never reply to the text, never address the writer, never add commentary, "
                 + "and plain text only. Output the text from its beginning, then the continuation.\n"
+            if !c.instructions.isEmpty { s += "\nAbout this person, in their own words: " + c.instructions + "\n" }
             if !c.samples.isEmpty {
                 s += "\nOther things this person wrote, for vocabulary and tone:\n"
                 s += c.samples.map { "- " + $0 }.joined(separator: "\n") + "\n"

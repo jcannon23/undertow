@@ -243,8 +243,31 @@ struct SettingsView: View {
                 Toggle("Offer fixes for typos", isOn: settings.$typoFix)
             }
             Section {
+                TextEditor(text: settings.$instructions)
+                    .font(.body)
+                    .frame(height: 64)
+                    .overlay(alignment: .topLeading) {
+                        if settings.instructions.isEmpty {
+                            Text("I'm a product manager. I write short, direct emails and avoid exclamation marks.")
+                                .foregroundStyle(.tertiary).padding(.leading, 5).allowsHitTesting(false)
+                        }
+                    }
+            } header: {
+                Text("About you")
+            } footer: {
+                Text("A sentence or two about your work and how you write. Keep it short: a long note pulls the model's attention off your text. Takes effect in the next field you click into.")
+            }
+            Section {
                 Toggle("Learn my writing style", isOn: settings.$learnStyle)
                     .onChange(of: settings.learnStyle) { _, _ in coordinator.refreshLM() }
+                Picker("Use my own words", selection: settings.$wordChoice) {
+                    Text("Off").tag(0)
+                    Text("A little").tag(1)
+                    Text("Medium").tag(2)
+                    Text("A lot").tag(3)
+                }
+                .onChange(of: settings.wordChoice) { _, _ in coordinator.refreshLM() }
+                .disabled(!settings.learnStyle)
                 LabeledContent("Learned so far") { Text(learnedSummary).foregroundStyle(.secondary) }
                 Button("Erase What Undertow Learned") { coordinator.style.erase(); coordinator.refreshLM(); learned = 0 }
                     .disabled(learned == 0 && coordinator.style.feedbackTotals.shown == 0)

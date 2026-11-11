@@ -25,6 +25,8 @@ struct PersonalLM {
     var followers: [String: [(word: String, p: Float)]] = [:]
     /// previous word (lowercased) -> suggestions the user has repeatedly turned down there.
     var rejected: [String: Set<String>] = [:]
+    /// How hard the user's own words pull against the model: 0 off, 1 normal.
+    var strength: Float = 1
     var isEmpty: Bool { words.isEmpty && followers.isEmpty && rejected.isEmpty }
 }
 
@@ -181,6 +183,7 @@ final class LlamaEngine {
     private func fusion(_ out: [UInt8], _ req: CompletionRequest) -> Fusion {
         var f = Fusion()
         if lm.isEmpty { return f }
+        let pull = lm.strength
         func ws(_ b: UInt8) -> Bool { b == 32 || b == 10 || b == 9 }
         let text = Array(req.stem.utf8.suffix(48)) + out
         var i = text.count
@@ -204,7 +207,7 @@ final class LlamaEngine {
                 if w.unusual, w.bytes.count > curr.count { rare += w.count; hits.append((w.bytes, w.count)) }
             }
             if rare > 0 {
-                let lambda = 0.92 * rare / (all + 1.5)
+                let lambda = min(0.95, pull * 0.92 * rare / (all + 1.5))
                 for (bytes, c) in hits {
                     let r = bytes[curr.count...]
                     var best: Int32 = -1, bestLen = 0
@@ -225,7 +228,7 @@ final class LlamaEngine {
             if let next = lm.followers[prev] {
                 for (w, p) in next {
                     let (sp, br) = firstTokens(w)
-                    if let t = bare ? br : sp { f.mass[t, default: 0] += 0.5 * p; f.lambda += 0.5 * p }
+                    if let t = bare ? br : sp { f.mass[t, default: 0] += pull * 0.5 * p; f.lambda += pull * 0.5 * p }
                 }
             }
             if let no = lm.rejected[prev] {

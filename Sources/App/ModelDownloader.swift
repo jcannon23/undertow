@@ -1,7 +1,9 @@
 import Foundation
 
-/// A model Undertow knows how to fetch. All are stock Gemma builds published by the llama.cpp
-/// project on Hugging Face.
+/// A model Undertow knows how to fetch. Gemma 4 comes from Google's own builds on Kaggle
+/// (Apache 2.0, no account needed); `file` is only the local name, kept stable so models
+/// installed by earlier versions still count as installed. Gemma 3 is licence-gated on Kaggle,
+/// so the light model still comes from the llama.cpp project on Hugging Face.
 struct ModelOption: Identifiable {
     let file: String
     let title: String
@@ -11,10 +13,10 @@ struct ModelOption: Identifiable {
     var id: String { file }
 
     static let catalog: [ModelOption] = [
-        .init(file: "gemma-4-E2B-it-Q4_0.gguf", title: "Gemma 4 E2B", note: "Recommended. Needs about 3 GB of memory.",
-            url: URL(string: "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf")!, approxGB: 2.8),
+        .init(file: "gemma-4-E2B-it-Q4_0.gguf", title: "Gemma 4 E2B", note: "Recommended. Needs about 3.5 GB of memory.",
+            url: URL(string: "https://www.kaggle.com/api/v1/models/google/gemma-4/gguf/gemma-4-e2b-it-qat-q4_0-gguf/2/download/gemma-4-E2B_q4_0-it.gguf")!, approxGB: 3.3),
         .init(file: "gemma-4-E4B-it-Q4_0.gguf", title: "Gemma 4 E4B", note: "Larger. For Macs with 24 GB or more.",
-            url: URL(string: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_0.gguf")!, approxGB: 4.6),
+            url: URL(string: "https://www.kaggle.com/api/v1/models/google/gemma-4/gguf/gemma-4-e4b-it-qat-q4_0-gguf/2/download/gemma-4-E4B_q4_0-it.gguf")!, approxGB: 5.2),
         .init(file: "gemma-3-1b-it-Q4_K_M.gguf", title: "Gemma 3 1B", note: "Light. Faster, less accurate; about 1 GB.",
             url: URL(string: "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf")!, approxGB: 0.8),
     ]

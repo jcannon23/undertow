@@ -10,6 +10,8 @@ final class Settings: ObservableObject {
     @AppStorage("showHint") var showHint = true
     @AppStorage("learnStyle") var learnStyle = true
     @AppStorage("typoFix") var typoFix = true
+    @AppStorage("wordChoice") var wordChoice = 2  // how hard learned words pull: 0 off, 1 low, 2 medium, 3 high
+    @AppStorage("instructions") var instructions = ""  // the user's note about themselves, fed to the model
     @AppStorage("terminals") var terminals = true
     @AppStorage("codeEditors") var codeEditors = false
     @AppStorage("disabledApps") var disabledAppsRaw = ""  // bundle ids, newline separated

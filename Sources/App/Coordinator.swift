@@ -34,7 +34,7 @@ final class Coordinator: ObservableObject {
     // Bookkeeping.
     private var lastInput = Date.distantPast
     private var predictedFor: String?
-    private var suppressed = false  // Esc: stay quiet until the text changes
+    private var suppressed = false  // Esc: stay quiet in this field until it is left or emptied
     private var caretStale = false  // text changed under us; wait for a fresh caret before drawing
     private var reading = false
     private var observerReadPending = false
@@ -91,7 +91,9 @@ final class Coordinator: ObservableObject {
 
     /// Hands the engine a fresh snapshot of everything learned about this user's writing.
     func refreshLM() {
-        engine.setPersonalLM(settings.learnStyle ? style.personalLM() : PersonalLM())
+        var lm = settings.learnStyle ? style.personalLM() : PersonalLM()
+        lm.strength = [0, 0.5, 1, 1.5][min(max(settings.wordChoice, 0), 3)]
+        engine.setPersonalLM(lm)
     }
 
     /// The user looked at a suggestion and took it, or typed past it. Both are lessons.
@@ -120,6 +122,9 @@ final class Coordinator: ObservableObject {
                 let fam = engine.family
                 DispatchQueue.main.async {
                     self.family = fam
+                    // Measured with Tools/bench: Gemma 4 gains two points from the chat framing,
+                    // Gemma 3 1B loses five to it. Anything else has turn markers we don't know.
+                    self.promptStyle = fam == "gemma4" ? .chat : .raw
                     self.modelState = .ready(url.lastPathComponent)
                     self.rebuildHeader()
                     self.predictedFor = nil
@@ -202,7 +207,7 @@ final class Coordinator: ObservableObject {
     private func typed(_ s: String) {
         Log.d("key ⟦\(s)⟧")
         keysInField += 1
-        suppressed = false
+        if before.isEmpty { suppressed = false }
         before += s
         if kind == .completion, !ghost.isEmpty, ghost.hasPrefix(s) {
             // Typing along with the suggestion: no model call, just slide.
@@ -223,7 +228,7 @@ final class Coordinator: ObservableObject {
 
     /// `before` changed in a way the current ghost does not survive.
     private func textChanged() {
-        suppressed = false
+        if before.isEmpty { suppressed = false }
         clearGhost()
         caretStale = true
         predict()
@@ -326,6 +331,7 @@ final class Coordinator: ObservableObject {
         c.app = s.appName
         c.title = String(s.windowTitle.prefix(80))
         c.after = String(s.after.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        c.instructions = String(settings.instructions.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))
         if settings.learnStyle { c.samples = style.relevant(app: s.bundleID, context: s.before + " " + s.windowTitle) }
         header = Prompt.header(promptStyle, c, family: family)
     }
