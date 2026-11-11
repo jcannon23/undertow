@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import AppKit
 import ApplicationServices
 import ServiceManagement
@@ -113,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showWindow() {
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
                 styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             w.title = "Undertow"
             w.isReleasedWhenClosed = false
@@ -135,7 +136,22 @@ struct SettingsView: View {
     @State private var learned = 0
     @State private var scratch = ""
 
+    @State private var custom: [URL] = []
+    @State private var addError: String?
+
     var body: some View {
+        TabView {
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            modelTab.tabItem { Label("Model", systemImage: "cpu") }
+            writing.tabItem { Label("Writing", systemImage: "pencil.line") }
+            apps.tabItem { Label("Apps", systemImage: "macwindow") }
+        }
+        .padding(.top, 8)
+        .frame(width: 520, height: 520)
+        .onAppear { learned = coordinator.style.count; settings.onboarded = true; refreshCustom() }
+    }
+
+    private var general: some View {
         Form {
             if !coordinator.trusted { permission }
             if systemPredictionOn { systemPrediction }
@@ -154,6 +170,12 @@ struct SettingsView: View {
                         }
                     }
             }
+            Section("Keys") {
+                LabeledContent("Next word") { Keys(["tab"]) }
+                LabeledContent("Whole suggestion") { Keys(["shift", "tab"]) }
+                LabeledContent("Other words that fit") { Keys(["option", "tab"]) }
+                LabeledContent("Dismiss") { Keys(["esc"]) }
+            }
             Section("Try it") {
                 TextEditor(text: $scratch)
                     .font(.body)
@@ -163,45 +185,145 @@ struct SettingsView: View {
                             Text("Type a sentence here…").foregroundStyle(.tertiary).padding(.leading, 5).allowsHitTesting(false)
                         }
                     }
-                LabeledContent("Next word") { Keys(["tab"]) }
-                LabeledContent("Whole suggestion") { Keys(["shift", "tab"]) }
-                LabeledContent("Other words that fit") { Keys(["option", "tab"]) }
-                LabeledContent("Dismiss") { Keys(["esc"]) }
-            }
-            Section("Model") {
-                ForEach(ModelOption.catalog) { m in ModelRow(model: m, coordinator: coordinator, downloader: coordinator.downloader, settings: settings) }
-                LabeledContent("Status") { Text(modelStatus).foregroundStyle(.secondary) }
-                Text("Models run entirely on this Mac and are released from memory after 20 idle minutes or when memory runs short. Undertow uses the largest installed model that fits comfortably unless you choose one.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("Writing help") {
-                Toggle("Offer fixes for typos", isOn: settings.$typoFix)
-                Toggle("Learn my writing style", isOn: settings.$learnStyle)
-                    .onChange(of: settings.learnStyle) { _, _ in coordinator.refreshLM() }
-                LabeledContent("Learned so far") {
-                    HStack {
-                        Text(learnedSummary).foregroundStyle(.secondary)
-                        Button("Erase") { coordinator.style.erase(); coordinator.refreshLM(); learned = 0 }.disabled(learned == 0 && coordinator.style.feedbackTotals.shown == 0)
-                    }
-                }
-                Text("Undertow keeps passages you type, your names and jargon, the words you tend to follow with, and which suggestions you take or type past. All of it stays encrypted on this Mac. Anything that looks like a password, key or card number is never stored.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("Where") {
-                Toggle("Terminals", isOn: settings.$terminals)
-                Toggle("Code editors", isOn: settings.$codeEditors)
-                ForEach(settings.disabledApps.sorted(), id: \.self) { id in
-                    LabeledContent(appName(id)) {
-                        Button("Turn On") { var s = settings.disabledApps; s.remove(id); settings.disabledApps = s }
-                    }
-                }
-                Text("Password fields and password managers are always ignored. Excel and Numbers start turned off, because Tab moves between cells there. To turn Undertow on or off for any app, switch to that app and use the menu bar icon.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 640)
-        .onAppear { learned = coordinator.style.count; settings.onboarded = true }
+    }
+
+    private var modelTab: some View {
+        Form {
+            Section {
+                ForEach(ModelOption.catalog) { m in ModelRow(model: m, coordinator: coordinator, downloader: coordinator.downloader, settings: settings) }
+            } header: {
+                Text("Recommended")
+            } footer: {
+                Text("Undertow uses the largest installed model that fits comfortably unless you choose one.")
+            }
+            Section {
+                ForEach(custom, id: \.self) { url in
+                    let name = url.lastPathComponent
+                    LabeledContent {
+                        HStack {
+                            if coordinator.modelState == .ready(name) {
+                                Label("In use", systemImage: "checkmark").foregroundStyle(.secondary)
+                            } else {
+                                Button("Use") { settings.model = name; coordinator.loadModel() }
+                            }
+                            Button("Remove") { removeCustom(url) }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(url.deletingPathExtension().lastPathComponent)
+                            Text(String(format: "%.1f GB", Double(Settings.size(url)) / 1e9)).font(.footnote).foregroundStyle(.secondary)
+                            if coordinator.modelState == .failed(name) {
+                                Text("Undertow could not load this file.").font(.footnote).foregroundStyle(.red)
+                            }
+                        }
+                    }
+                }
+                Button("Add Model File…") { addModel() }
+                if let addError { Text(addError).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            } header: {
+                Text("Your own")
+            } footer: {
+                Text("Point Undertow at a model you downloaded yourself. It must be a GGUF file; Gemma models work best. The file stays where it is, so keep it there.")
+            }
+            Section {
+                LabeledContent("Status") { Text(modelStatus).foregroundStyle(.secondary) }
+            } footer: {
+                Text("Models run entirely on this Mac and are released from memory after 20 idle minutes or when memory runs short.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var writing: some View {
+        Form {
+            Section {
+                Toggle("Offer fixes for typos", isOn: settings.$typoFix)
+            }
+            Section {
+                Toggle("Learn my writing style", isOn: settings.$learnStyle)
+                    .onChange(of: settings.learnStyle) { _, _ in coordinator.refreshLM() }
+                LabeledContent("Learned so far") { Text(learnedSummary).foregroundStyle(.secondary) }
+                Button("Erase What Undertow Learned") { coordinator.style.erase(); coordinator.refreshLM(); learned = 0 }
+                    .disabled(learned == 0 && coordinator.style.feedbackTotals.shown == 0)
+            } header: {
+                Text("Your style")
+            } footer: {
+                Text("Undertow keeps passages you type, your names and jargon, the words you tend to follow with, and which suggestions you take or type past. All of it stays encrypted on this Mac. Anything that looks like a password, key or card number is never stored.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var apps: some View {
+        Form {
+            Section("Kinds of app") {
+                Toggle("Terminals", isOn: settings.$terminals)
+                Toggle("Code editors", isOn: settings.$codeEditors)
+            }
+            Section {
+                if settings.disabledApps.isEmpty { Text("None").foregroundStyle(.secondary) }
+                ForEach(settings.disabledApps.sorted(), id: \.self) { id in
+                    LabeledContent {
+                        Button("Turn On") { var s = settings.disabledApps; s.remove(id); settings.disabledApps = s }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(nsImage: appIcon(id)).resizable().frame(width: 20, height: 20)
+                            Text(appName(id))
+                        }
+                    }
+                }
+            } header: {
+                Text("Turned off in")
+            } footer: {
+                Text("To turn Undertow off in an app, switch to that app and choose Turn Off from the menu bar icon. Excel and Numbers start turned off, because Tab moves between cells there. Password fields and password managers are always ignored.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Model files in the Models folder that are not ones Undertow offers itself.
+    private func refreshCustom() {
+        let known = Set(ModelOption.catalog.map(\.file))
+        custom = Settings.installedModels().filter { !known.contains($0.lastPathComponent) }
+    }
+
+    /// Links the chosen file into the Models folder, so a multi-gigabyte model is not copied.
+    private func addModel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
+        panel.message = "Choose a GGUF model file"
+        guard panel.runModal() == .OK, let src = panel.url else { return }
+        addError = nil
+        let ram = ProcessInfo.processInfo.physicalMemory
+        guard Settings.size(src) <= Int(ram / 2) else {
+            addError = String(format: "That model is %.1f GB, too large for this Mac's %d GB of memory. Choose one under %d GB.",
+                Double(Settings.size(src)) / 1e9, Int(ram >> 30), Int(ram >> 31))
+            return
+        }
+        let dest = Settings.modelsDir.appendingPathComponent(src.lastPathComponent)
+        let fm = FileManager.default
+        if src.standardizedFileURL != dest.standardizedFileURL {
+            if (try? dest.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { try? fm.removeItem(at: dest) }
+            guard !fm.fileExists(atPath: dest.path) else { addError = "A model with that name is already installed."; return }
+            do { try fm.createSymbolicLink(at: dest, withDestinationURL: src) } catch { addError = error.localizedDescription; return }
+        }
+        settings.model = dest.lastPathComponent
+        coordinator.loadModel()
+        refreshCustom()
+    }
+
+    /// Forgets a model the user added. Only the link goes; a real file is left for them to delete.
+    private func removeCustom(_ url: URL) {
+        if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        if settings.model == url.lastPathComponent { settings.model = ""; coordinator.loadModel() }
+        refreshCustom()
     }
 
     private var permission: some View {
@@ -256,8 +378,14 @@ struct SettingsView: View {
         }
     }
 
+    private func appIcon(_ id: String) -> NSImage {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { NSWorkspace.shared.icon(forFile: $0.path) }
+            ?? NSWorkspace.shared.icon(for: .application)
+    }
+
     private func appName(_ id: String) -> String {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { FileManager.default.displayName(atPath: $0.path) } ?? id
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { FileManager.default.displayName(atPath: $0.path) }
+            ?? id.split(separator: ".").last.map(String.init) ?? id  // not installed here: "com.apple.Numbers" reads as "Numbers"
     }
 }
 

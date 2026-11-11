@@ -75,10 +75,11 @@ final class Settings: ObservableObject {
     static func installedModels() -> [URL] {
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: modelsDir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-        return files.filter { $0.pathExtension == "gguf" }.sorted { size($0) > size($1) }
+        // A model the user pointed us at is a link; skip it if the file behind it has gone.
+        return files.filter { $0.pathExtension == "gguf" && fm.fileExists(atPath: $0.path) }.sorted { size($0) > size($1) }
     }
 
-    static func size(_ u: URL) -> Int { (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+    static func size(_ u: URL) -> Int { (try? u.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
 
     /// The chosen model, or the largest one that leaves this Mac comfortable headroom.
     func resolvedModel() -> URL? {
