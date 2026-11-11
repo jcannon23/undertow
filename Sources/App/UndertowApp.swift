@@ -195,7 +195,7 @@ struct SettingsView: View {
                         Button("Turn On") { var s = settings.disabledApps; s.remove(id); settings.disabledApps = s }
                     }
                 }
-                Text("Password fields and password managers are always ignored. Turn Undertow off for any app from its menu bar icon.")
+                Text("Password fields and password managers are always ignored. Excel and Numbers start turned off, because Tab moves between cells there. To turn Undertow on or off for any app, switch to that app and use the menu bar icon.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

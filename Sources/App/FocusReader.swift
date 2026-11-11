@@ -160,6 +160,7 @@ final class FocusReader {
         s.caret = caretRect(el, loc: loc, count: count, before: s.before)
         if s.caret == nil { s.caret = markerCaret(el) }
         readStyle(el, at: loc > 0 ? loc - 1 : 0, count: count, into: &s)
+        if s.caret == nil, start == 0 { runCaret(el, into: &s) }
     }
 
     private func caretRect(_ el: AXUIElement, loc: Int, count: Int, before: String) -> CGRect? {
@@ -184,6 +185,72 @@ final class FocusReader {
         return CGRect(x: r.maxX, y: r.minY, width: 0, height: r.height)
     }
 
+    /// Font size last seen on a one-line text run, for reading wrapped runs.
+    private var runFontSize: CGFloat = 14
+
+    /// Embedded Chromium (Teams, Outlook) answers every range-bounds query with an empty rect, but
+    /// the frame of each text run is right. Find the run holding the caret and measure into it.
+    /// Needs `before` to hold the whole text up to the caret.
+    private func runCaret(_ root: AXUIElement, into s: inout FieldSnapshot) {
+        guard s.before.last?.isNewline != true else { return }  // an empty line has no run to measure
+        var runs: [AXUIElement] = []
+        var budget = 150
+        func collect(_ e: AXUIElement) {
+            budget -= 1
+            guard budget > 0 else { return }
+            if e.string(kAXRoleAttribute) == "AXStaticText" { return runs.append(e) }
+            for k in e.attr(kAXChildrenAttribute) as? [AXUIElement] ?? [] { collect(k) }
+        }
+        collect(root)
+        var left = s.before.unicodeScalars.filter { !CharacterSet.newlines.contains($0) }.count
+        for run in runs {
+            guard let text = run.string(kAXValueAttribute), let f = run.frame, f.height > 2 else { continue }
+            let n = text.unicodeScalars.filter { !CharacterSet.newlines.contains($0) }.count
+            if left > n { left -= n; continue }
+            guard n == text.unicodeScalars.count else { return }
+            let prefix = String(String.UnicodeScalarView(text.unicodeScalars.prefix(left)))
+            let glyphH = 1.21 * runFontSize
+            if f.height < glyphH * 1.5 {
+                func width(_ t: String, _ size: CGFloat) -> CGFloat {
+                    (t as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width
+                }
+                // The run's width gives the font size far more exactly than its height, and a
+                // wrapped run breaks in the wrong place if the size is off by even a point.
+                if text.count >= 12, text.last?.isWhitespace == false {
+                    let size = (14 * f.width / width(text, 14) * 2).rounded() / 2
+                    if size >= 9, size <= 40 { runFontSize = size }
+                }
+                let font = NSFont.systemFont(ofSize: runFontSize)
+                func width(_ t: String) -> CGFloat { width(t, runFontSize) }
+                let whole = width(text)
+                s.caret = CGRect(x: f.minX + (whole > 0 ? width(prefix) / whole * f.width : 0), y: f.minY, width: 0, height: f.height)
+                s.font = s.font ?? font
+            } else if let parent = run.attr(kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID(),
+                let block = (parent as! AXUIElement).frame, !prefix.isEmpty
+            {
+                // A wrapped run: break the lines the way the web view did and read off the last one.
+                let font = NSFont.systemFont(ofSize: runFontSize)
+                let storage = NSTextStorage(string: prefix, attributes: [.font: font])
+                let lm = NSLayoutManager()
+                let box = NSTextContainer(size: CGSize(width: block.width, height: .greatestFiniteMagnitude))
+                box.lineFragmentPadding = 0
+                lm.addTextContainer(box)
+                storage.addLayoutManager(lm)
+                let glyphs = lm.glyphRange(for: box)
+                guard glyphs.length > 0 else { return }
+                var lines = 0
+                lm.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, _, _ in lines += 1 }
+                let total = Int(((f.height - glyphH) / (glyphH * 1.18)).rounded()) + 1
+                guard lines <= total, total > 1 else { return }
+                let step = (f.height - glyphH) / CGFloat(total - 1)
+                let end = lm.boundingRect(forGlyphRange: NSRange(location: glyphs.upperBound - 1, length: 1), in: box).maxX
+                s.caret = CGRect(x: block.minX + end, y: f.minY + CGFloat(lines - 1) * step, width: 0, height: glyphH)
+                s.font = s.font ?? font
+            }
+            return
+        }
+    }
+
     private func readMarkers(_ el: AXUIElement, into s: inout FieldSnapshot) {
         // Only editable web content: a page you are merely reading also has a "selection".
         guard el.attr("AXEditableAncestor") != nil || el.attr("AXHighestEditableAncestor") != nil,
@@ -198,6 +265,7 @@ final class FocusReader {
         {
             s.before = String(text.suffix(tailChars))
             s.textAvailable = true
+            if s.caret == nil, text.count <= tailChars { runCaret(el, into: &s) }
         }
     }
 

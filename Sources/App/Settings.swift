@@ -41,6 +41,16 @@ final class Settings: ObservableObject {
         "com.sublimetext.4", "com.exafunction.windsurf",
     ]
 
+    @AppStorage("seededOffApps") var seededOffApps = false
+
+    /// Tab moves between cells in a spreadsheet, so those start turned off. Done once: after
+    /// that the list is the user's.
+    func seedDisabledApps() {
+        guard !seededOffApps else { return }
+        seededOffApps = true
+        disabledApps.formUnion(["com.microsoft.Excel", "com.apple.Numbers"])
+    }
+
     func allows(_ bundleID: String) -> Bool {
         if Self.passwordManagers.contains(bundleID) || disabledApps.contains(bundleID) { return false }
         if FocusReader.terminals.contains(bundleID) { return terminals }

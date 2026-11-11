@@ -83,6 +83,7 @@ final class Coordinator: ObservableObject {
         refreshLM()
         refreshTrust()
         Settings.adoptBundledModels()
+        settings.seedDisabledApps()
         loadModel()
         // Slim install with no model anywhere: fetch the recommended one without being asked.
         if modelState == .missing { downloader.start(ModelOption.catalog[0]) }
