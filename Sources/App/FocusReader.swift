@@ -75,7 +75,7 @@ private func rectValue(_ v: AnyObject?) -> CGRect? {
 final class FocusReader {
     let queue = DispatchQueue(label: "undertow.ax", qos: .userInteractive)
     private var prepared = Set<pid_t>()
-    private static let chromium: Set<String> = [
+    static let chromium: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.canary", "com.brave.Browser", "com.microsoft.edgemac",
         "company.thebrowser.Browser", "company.thebrowser.dia", "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
         "org.chromium.Chromium", "com.openai.atlas", "ai.perplexity.comet",

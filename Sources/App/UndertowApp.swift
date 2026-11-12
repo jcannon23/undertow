@@ -283,6 +283,7 @@ struct SettingsView: View {
     private var apps: some View {
         Form {
             Section("Kinds of app") {
+                Toggle("Web browsers", isOn: settings.$browsers)
                 Toggle("Terminals", isOn: settings.$terminals)
                 Toggle("Code editors", isOn: settings.$codeEditors)
             }

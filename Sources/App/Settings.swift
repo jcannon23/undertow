@@ -14,6 +14,7 @@ final class Settings: ObservableObject {
     @AppStorage("instructions") var instructions = ""  // the user's note about themselves, fed to the model
     @AppStorage("terminals") var terminals = true
     @AppStorage("codeEditors") var codeEditors = false
+    @AppStorage("browsers") var browsers = true
     @AppStorage("disabledApps") var disabledAppsRaw = ""  // bundle ids, newline separated
     @AppStorage("wordsAccepted") var wordsAccepted = 0
     @AppStorage("onboarded") var onboarded = false
@@ -53,9 +54,14 @@ final class Settings: ObservableObject {
         disabledApps.formUnion(["com.microsoft.Excel", "com.apple.Numbers"])
     }
 
+    private static let browserIDs = FocusReader.chromium.union([
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview", "org.mozilla.firefox", "com.kagi.kagimacOS",
+    ])
+
     func allows(_ bundleID: String) -> Bool {
         if Self.passwordManagers.contains(bundleID) || disabledApps.contains(bundleID) { return false }
         if FocusReader.terminals.contains(bundleID) { return terminals }
+        if Self.browserIDs.contains(bundleID) { return browsers }
         if Self.codeEditorIDs.contains(bundleID) || bundleID.hasPrefix("com.jetbrains.") { return codeEditors }
         return true
     }
