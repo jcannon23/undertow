@@ -72,7 +72,7 @@ let passages = try String(contentsOf: corpusPath, encoding: .utf8)
     .components(separatedBy: "\n---\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.prefix(limit)
 
 var chars = 0, keys = 0, right = 0, wrong = 0, blank = 0
-var lat: [Double] = []
+var lat: [Double] = [], first: [Double] = []
 for text in passages {
     var typed = String(text.prefix(12))
     var sugg = ""
@@ -80,7 +80,7 @@ for text in passages {
     while typed.count < text.count {
         if sugg.isEmpty {
             let c = request(typed)
-            lat.append(c.ms)
+            lat.append(c.ms); first.append(c.firstMs > 0 ? c.firstMs : c.ms)
             sugg = c.text
             if sugg.isEmpty { blank += 1 }
         }
@@ -106,4 +106,6 @@ print(String(format: "style=%@ minProb=%.2f minFirst=%.2f maxTok=%d", style.rawV
 print(String(format: "keystrokes saved: %.1f%%   (%d keys for %d chars)", 100 * (1 - Double(keys) / Double(chars)), keys, chars))
 print(String(format: "shown-word precision: %.1f%%   (%d right, %d wrong, %d blank)", 100 * Double(right) / Double(max(1, right + wrong)), right, wrong, blank))
 print(String(format: "latency ms: p50 %.0f  p90 %.0f  p99 %.0f  (%d requests)", pct(0.5), pct(0.9), pct(0.99), lat.count))
+first.sort()
+print(String(format: "first suggestion ms: p50 %.0f  p90 %.0f", first.isEmpty ? 0 : first[first.count / 2], first.isEmpty ? 0 : first[min(first.count - 1, first.count * 9 / 10)]))
 engine.unload()

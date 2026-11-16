@@ -87,6 +87,24 @@ final class FocusReader {
     private static let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"]
     private let tailChars = 6000
 
+    private var secretChecked: (el: AXUIElement, secret: Bool)?
+
+    /// Password, payment card and one-time-code fields that are not marked secure, told from the
+    /// field's labels and identifiers. Checked once per field: it costs several round trips.
+    private func looksSecret(_ el: AXUIElement) -> Bool {
+        if let c = secretChecked, CFEqual(c.el, el) { return c.secret }
+        func strings(_ name: String) -> [String] { el.attr(name) as? [String] ?? [] }
+        let autofill = el.string("AXValueAutofillType")
+        let ids = [el.string("AXDOMIdentifier"), el.string(kAXIdentifierAttribute)].compactMap { $0 } + strings("AXDOMClassList")
+        let labels = [kAXPlaceholderValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute].compactMap { el.string($0) }
+            + strings("AXUserInputLabels")
+        let secret = SecretFieldHints.isCredentialAutofill(autofill) || SecretFieldHints.isPaymentAutofill(autofill)
+            || ids.contains(where: SecretFieldHints.namesPaymentOrOneTimeCode)
+            || labels.contains { SecretFieldHints.mentionsPassword($0) || SecretFieldHints.namesPaymentOrOneTimeCode($0) }
+        secretChecked = (el, secret)
+        return secret
+    }
+
     func read(pid: pid_t, bundleID: String, appName: String) -> FieldSnapshot? {
         let app = AXUIElementCreateApplication(pid)
         if prepared.insert(pid).inserted {
@@ -102,7 +120,7 @@ final class FocusReader {
         let el = f as! AXUIElement
         var s = FieldSnapshot(pid: pid, bundleID: bundleID, appName: appName, element: el)
         s.role = el.string(kAXRoleAttribute) ?? ""
-        s.secure = el.string(kAXSubroleAttribute) == "AXSecureTextField"
+        s.secure = el.string(kAXSubroleAttribute) == "AXSecureTextField" || looksSecret(el)
         if s.secure { return s }
         s.fieldFrame = el.frame
         if let w = app.attr(kAXFocusedWindowAttribute), CFGetTypeID(w) == AXUIElementGetTypeID() {

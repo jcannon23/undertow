@@ -22,6 +22,7 @@ final class Coordinator: ObservableObject {
     private var snap: FieldSnapshot?
     private var before = ""
     private var header = ""
+    private var screenText = ""  // window text near the caret, read once per field
     private var keysInField = 0
 
     // What is on screen.
@@ -79,6 +80,8 @@ final class Coordinator: ObservableObject {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             self?.harvest()
             self?.style.save()
+            // ggml aborts at exit while Metal buffers are alive, which shows as a crash report on every quit.
+            self?.engine.unload()
         }
         refreshLM()
         refreshTrust()
@@ -295,7 +298,9 @@ final class Coordinator: ObservableObject {
             before = s.textAvailable ? s.before : ""
             snap = s
             caretStale = false
+            screenText = ""
             rebuildHeader()
+            scanWindow()
         } else if s.textAvailable, s.before != before {
             // The app may simply not have processed keys we already counted.
             if before.hasPrefix(s.before), Date().timeIntervalSince(lastInput) < 0.4 { scheduleRead(0.03); return }
@@ -331,9 +336,33 @@ final class Coordinator: ObservableObject {
         c.app = s.appName
         c.title = String(s.windowTitle.prefix(80))
         c.after = String(s.after.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        c.screen = screenText
         c.instructions = String(settings.instructions.trimmingCharacters(in: .whitespacesAndNewlines).prefix(400))
         if settings.learnStyle { c.samples = style.relevant(app: s.bundleID, context: s.before + " " + s.windowTitle) }
         header = Prompt.header(promptStyle, c, family: family)
+    }
+
+    /// Reads the text around the field (the message being answered, the paragraph above) so the
+    /// model knows what the user is writing about. Stays in memory, in the prompt only.
+    private func scanWindow() {
+        guard settings.windowContext, promptStyle == .chat, let s = snap, !FocusReader.terminals.contains(s.bundleID)
+        else { return }
+        let field = s.fieldFrame ?? .zero
+        let caret = s.caret ?? CGRect(x: field.minX, y: field.minY, width: max(field.width, 1), height: 1)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let scan = AXWindowReader.scan(pid: s.pid, caret: caret, field: field, fieldText: s.before + s.after)
+            else { return }
+            let text = ScreenText.render(
+                scan.chunks, fieldText: s.before + s.after, titles: [s.windowTitle, s.appName], caret: caret,
+                field: field, maxCharacters: 1200) ?? ""
+            DispatchQueue.main.async {
+                guard let self, let now = self.snap, now.sameField(as: s), text != self.screenText else { return }
+                Log.d("window text \(text.count) chars, \(scan.nodesVisited) nodes, \(Int(scan.elapsedMs))ms")
+                self.screenText = text
+                self.rebuildHeader()
+                if self.ghost.isEmpty { self.predictedFor = nil }
+            }
+        }
     }
 
     /// Remember what was written in the field we are leaving (if the user really typed it).
@@ -349,6 +378,7 @@ final class Coordinator: ObservableObject {
     private func predict() {
         guard settings.enabled, ready, !suppressed, let s = snap, !s.secure else { return }
         guard before.contains(where: { !$0.isWhitespace }), let (stem, cons) = Prompt.split(before) else { return }
+        guard before.contains(where: { $0.isWhitespace || ($0.unicodeScalars.first?.value ?? 0) >= 0x2E80 }) else { return }
         predictedFor = before
         var r = CompletionRequest()
         r.header = header

@@ -241,6 +241,9 @@ struct SettingsView: View {
         Form {
             Section {
                 Toggle("Offer fixes for typos", isOn: settings.$typoFix)
+                Toggle("Read the window for context", isOn: settings.$windowContext)
+                Text("Uses nearby text, such as the message you are answering, to suggest better words. It stays on this Mac and is never saved.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 TextEditor(text: settings.$instructions)

@@ -12,6 +12,7 @@ final class Settings: ObservableObject {
     @AppStorage("typoFix") var typoFix = true
     @AppStorage("wordChoice") var wordChoice = 2  // how hard learned words pull: 0 off, 1 low, 2 medium, 3 high
     @AppStorage("instructions") var instructions = ""  // the user's note about themselves, fed to the model
+    @AppStorage("windowContext") var windowContext = true  // read nearby window text into the prompt
     @AppStorage("terminals") var terminals = true
     @AppStorage("codeEditors") var codeEditors = false
     @AppStorage("browsers") var browsers = true

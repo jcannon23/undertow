@@ -33,7 +33,7 @@ login keychain under the account `undertow`; without it no update can be signed,
 
 ## Layout
 
-- `Sources/Engine`: llama.cpp wrapper (cache reuse, prefix-constrained decoding, personal language model) and prompt.
+- `Sources/Engine`: prompt, and the engine's face to the app. `Sources/Engine/Ported` is the beam-search engine from Ghostwriter (several candidates kept alive, following the typing).
 - `Sources/App`: field reader (Accessibility), key tap, ghost overlay, coordinator, learning store, settings.
 - `Tools/bench`: simulated typist; the number the engine is tuned against.
 - `Tools/icon`: draws the app icon and menu-bar glyph.
@@ -43,3 +43,10 @@ login keychain under the account `undertow`; without it no update can be signed,
     defaults write app.undertow.Undertow debugLog -bool YES   # then relaunch
 
 writes `~/Library/Logs/Undertow.log`. It records typed text: turn it off and delete the log after.
+
+## License
+
+Undertow is free software under the [GNU General Public License v3.0](LICENSE).
+
+Parts of it are adapted from [Ghostwriter](https://github.com/mshll/ghostwriter) (GPL-3.0): the
+files in `Sources/App/Ported` and `Sources/Engine/Ported`. Each says so at the top.

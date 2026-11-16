@@ -1,0 +1,160 @@
+// Adapted from Ghostwriter (https://github.com/mshll/ghostwriter), GPL-3.0. Changed for Undertow, 2026-11.
+import CoreGraphics
+import Foundation
+
+/// A piece of visible text and its frame in global screen coordinates (top-left origin).
+struct TextChunk: Sendable, Hashable {
+    var text: String
+    var frame: CGRect
+}
+
+enum ScreenText {
+    static let belowCaretPenalty: CGFloat = 2
+
+    static func render(
+        _ chunks: [TextChunk], fieldText: String, titles: [String], caret anchor: CGRect, field: CGRect,
+        maxCharacters: Int
+    ) -> String? {
+        var seen: Set<String> = [normalized(fieldText)]
+        let titles = titles.map(normalized).filter { !$0.isEmpty }
+        seen.formUnion(titles)
+        let ranked = chunks
+            .filter { !isFieldFrame($0.frame, field) }
+            .map { (chunk: $0, score: score($0.frame, caret: anchor, field: field)) }
+            .sorted { $0.score < $1.score }
+
+        var picked: [TextChunk] = []
+        var remaining = maxCharacters
+        for (chunk, _) in ranked where remaining > 0 {
+            guard let text = cleaned(chunk.text) else { continue }
+            let key = normalized(text)
+            if titles.contains(where: { key.contains($0) && key.count <= $0.count + 6 }) { continue }
+            guard seen.insert(key).inserted else { continue }
+            let fitted = fit(text, into: remaining, keepEnd: isAbove(chunk, anchor))
+            guard !fitted.isEmpty else { break }
+            picked.append(TextChunk(text: fitted, frame: chunk.frame))
+            remaining -= fitted.count + 1
+        }
+        return picked.isEmpty ? nil : readingOrder(picked, caret: anchor).map(\.text).joined(separator: "\n")
+    }
+
+    /// Text below the caret first, then the text above it, each top to bottom, so the text nearest above
+    /// the caret ends the section, next to the typed text that follows it in the prompt.
+    static func readingOrder(_ chunks: [TextChunk], caret: CGRect) -> [TextChunk] {
+        topToBottom(chunks.filter { !isAbove($0, caret) }) + topToBottom(chunks.filter { isAbove($0, caret) })
+    }
+
+    private static func isAbove(_ chunk: TextChunk, _ caret: CGRect) -> Bool {
+        chunk.frame.midY <= caret.midY
+    }
+
+    private static func topToBottom(_ chunks: [TextChunk]) -> [TextChunk] {
+        var rows: [[TextChunk]] = []
+        for chunk in chunks.sorted(by: { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }) {
+            if let first = rows.last?.first, chunk.frame.midY < first.frame.maxY {
+                rows[rows.count - 1].append(chunk)
+            } else {
+                rows.append([chunk])
+            }
+        }
+        return rows.flatMap { row in
+            let leftToRight = row.sorted { $0.frame.minX < $1.frame.minX }
+            return isRightToLeft(row) ? leftToRight.reversed() : leftToRight
+        }
+    }
+
+    private static func isRightToLeft(_ row: [TextChunk]) -> Bool {
+        let letters = row.flatMap(\.text.unicodeScalars).filter(\.properties.isAlphabetic)
+        return letters.filter(\.isRightToLeftScript).count * 2 > letters.count
+    }
+
+    static func score(_ frame: CGRect, caret: CGRect, field: CGRect) -> CGFloat {
+        let vertical: CGFloat
+        if frame.maxY <= caret.minY {
+            vertical = caret.minY - frame.maxY
+        } else if frame.minY >= caret.maxY {
+            vertical = (frame.minY - caret.maxY) * belowCaretPenalty
+        } else {
+            vertical = 0
+        }
+        let column = field.isEmpty ? caret : field
+        let horizontal = max(0, column.minX - frame.maxX, frame.minX - column.maxX)
+        return vertical + horizontal
+    }
+
+    static func isFieldFrame(_ frame: CGRect, _ field: CGRect) -> Bool {
+        guard !field.isEmpty else { return false }
+        let tolerance: CGFloat = 2
+        return abs(frame.minX - field.minX) <= tolerance && abs(frame.minY - field.minY) <= tolerance
+            && abs(frame.width - field.width) <= tolerance && abs(frame.height - field.height) <= tolerance
+    }
+
+    static func cleaned(_ text: String) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+            let trimmed = stripTrailingClock(line.trimmingCharacters(in: .whitespaces))
+            guard trimmed.unicodeScalars.filter(CharacterSet.letters.contains).count >= 3 else { return nil }
+            let words = trimmed.split(whereSeparator: \.isWhitespace)
+            let length = trimmed.count + 2 * trimmed.filter(\.isUnsegmentedScript).count
+            guard words.count >= 2 || length >= 15 else { return nil }
+            return trimmed
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    static func normalized(_ text: String) -> String {
+        text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    nonisolated(unsafe) private static let trailingClock =
+        #/\s*(?:[01]?\d|2[0-3])[:.][0-5]\d(?:\s?[AaPp]\.?[Mm]\.?)?\s*$/#
+
+    private static func stripTrailingClock(_ line: String) -> String {
+        let stripped = line.replacing(trailingClock, with: "")
+        guard stripped != line else { return line }
+        return stripped.trimmingCharacters(in: CharacterSet(charactersIn: ",·•|-–—").union(.whitespaces))
+    }
+
+    static func fit(_ text: String, into limit: Int, keepEnd: Bool) -> String {
+        guard text.count > limit else { return text }
+        guard limit > 0 else { return "" }
+        if keepEnd {
+            let tail = text.suffix(limit)
+            guard let space = tail.firstIndex(where: \.isWhitespace) else { return String(tail) }
+            return String(tail[space...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let head = text.prefix(limit)
+        guard let space = head.lastIndex(where: \.isWhitespace) else { return String(head) }
+        return String(head[..<space]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func join(_ left: String, _ right: String, newLine: Bool) -> String {
+        if left.isEmpty { return right }
+        if newLine { return left + "\n" + right }
+        let leftEnds = left.last.map { $0.isWhitespace } ?? true
+        let rightStarts = right.first.map { $0.isWhitespace || ",.;:!?)]}%".contains($0) } ?? true
+        return left + (leftEnds || rightStarts ? "" : " ") + right
+    }
+}
+
+private extension Unicode.Scalar {
+    var isRightToLeftScript: Bool {
+        switch value {
+        case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF, 0x10800...0x10FFF, 0x1E800...0x1EFFF: true
+        default: false
+        }
+    }
+}
+
+private extension Character {
+    var isUnsegmentedScript: Bool {
+        guard let value = unicodeScalars.first?.value else { return false }
+        switch value {
+        case 0x0E00...0x0EFF, 0x1000...0x109F, 0x1780...0x17FF,
+             0x3040...0x30FF, 0x31F0...0x31FF, 0x3400...0x4DBF, 0x4E00...0x9FFF,
+             0xF900...0xFAFF, 0xFF66...0xFF9F, 0x20000...0x2FA1F:
+            return true
+        default:
+            return false
+        }
+    }
+}

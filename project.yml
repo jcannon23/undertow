@@ -1,7 +1,7 @@
 name: Undertow
 options:
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "15.0"
   createIntermediateGroups: true
 packages:
   Sparkle:
@@ -29,7 +29,7 @@ targets:
         PRODUCT_NAME: Undertow
         PRODUCT_MODULE_NAME: Undertow
         SDKROOT: macosx
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
         COMBINE_HIDPI_IMAGES: YES
         DEAD_CODE_STRIPPING: YES

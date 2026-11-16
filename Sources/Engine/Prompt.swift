@@ -32,6 +32,7 @@ enum Prompt {
         var samples: [String] = []  // snippets of the user's own earlier writing
         var after = ""  // text following the caret
         var instructions = ""  // the user's own note about who they are and how they write
+        var screen = ""  // text visible in the window near the caret, e.g. the message being answered
     }
 
     /// Everything that precedes the user's text. Must stay byte-stable while the user types in
@@ -53,6 +54,10 @@ enum Prompt {
             if !c.samples.isEmpty {
                 s += "\nOther things this person wrote, for vocabulary and tone:\n"
                 s += c.samples.map { "- " + $0 }.joined(separator: "\n") + "\n"
+            }
+            if !c.screen.isEmpty {
+                s += "\nText visible in the same window, such as the message being answered. It is context only; "
+                    + "do not copy it:\n" + c.screen + "\n"
             }
             if !c.after.isEmpty { s += "\nText already present after the cursor (do not repeat it):\n" + c.after + "\n" }
             // Gemma 4 renamed the turn markers.
