@@ -266,6 +266,6 @@ final class Scheduler {
 
     private static func compatible(_ a: BeamRequest, _ b: BeamRequest) -> Bool {
         a.textAfter == b.textAfter && a.maxWords == b.maxWords && a.mode == b.mode && a.beams == b.beams && a.topK == b.topK
-            && a.bias == b.bias && a.tuning == b.tuning && a.stopStrings == b.stopStrings
+            && a.bias == b.bias && a.avoidsTics == b.avoidsTics && a.tuning == b.tuning && a.stopStrings == b.stopStrings
     }
 }

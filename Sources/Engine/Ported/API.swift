@@ -61,6 +61,9 @@ public struct BeamRequest: Sendable, Hashable {
     public var bias: TokenBias?
     public var tuning: SearchTuning
     public var stopStrings: [String]
+    /// Keep out characters that instruction-tuned models love and people rarely type in prose
+    /// (curly quotes, long dashes, markdown, emoji). Undertow sets it unless the person's text uses them.
+    public var avoidsTics = false
 
     public init(
         prompt: String, partialWord: String = "", textAfter: String = "", maxWords: Int,
@@ -80,20 +83,41 @@ public struct BeamRequest: Sendable, Hashable {
     }
 }
 
+/// One person's word habits (Undertow's personal model), blended into the search's probabilities.
 public struct TokenBias: Sendable, Hashable {
+    public struct Word: Sendable {
+        public var bytes: [UInt8]
+        public var count: Float
+        /// A name or a piece of jargon the model cannot know.
+        public var unusual: Bool
+    }
+
+    /// previous word (lowercased) -> words that tend to follow it, with P(next | previous).
     public var followers: [String: [String: Double]]
+    /// Every word the person has written.
+    public var words: [Word] = []
+    /// previous word (lowercased) -> suggestions the person keeps turning down there.
+    public var rejected: [String: Set<String>] = [:]
+    /// 0 off, 1 normal.
     public var strength: Double
+    /// Stands for the contents when two biases are compared, which happens on every request.
+    public var id = 0
 
     public init(followers: [String: [String: Double]], strength: Double) {
         self.followers = followers
         self.strength = strength
     }
+
+    public static func == (a: TokenBias, b: TokenBias) -> Bool { a.id == b.id && a.strength == b.strength }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 public struct Candidate: Sendable, Hashable {
     /// Text to insert at the caret (excludes the already-typed partial word).
     public var text: String
     public var score: Double
+    /// Probability of the candidate's first token, among the tokens that fit what was typed.
+    public var firstProbability = 0.0
 
     public init(text: String, score: Double) {
         self.text = text

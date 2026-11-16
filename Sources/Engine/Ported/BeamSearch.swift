@@ -21,6 +21,8 @@ struct Beam {
     var probabilitySum = 0.0
     var probabilityCount = 0
     var pendingSentenceEnd = false
+    /// Probability of the beam's first token, among the tokens that fit what was typed.
+    var firstProbability = 0.0
 
     var meanProbability: Double { probabilityCount > 0 ? probabilitySum / Double(probabilityCount) : 0 }
 
@@ -47,6 +49,7 @@ struct FinishedText {
     var bytes: [UInt8]
     var path: ScoredPath
     var parked: Int?
+    var first = 0.0
 }
 
 struct ParkedBeam {
@@ -242,25 +245,31 @@ final class BeamSearch {
 
     func ranked() -> [Candidate] {
         let limit = min(max(request.tuning.maxCandidates, 1), session.maxBeams - 1)
-        let scored = finished.compactMap { entry in text(of: entry).map { ($0, score(entry.path)) } }.sorted { $0.1 > $1.1 }
+        let scored = finished.compactMap { entry in text(of: entry).map { ($0, score(entry.path), entry.first) } }.sorted { $0.1 > $1.1 }
         var seen = Set<String>()
         var result: [Candidate] = []
-        for (text, score) in scored where seen.insert(text).inserted {
-            result.append(Candidate(text: text, score: score))
+        for (text, score, first) in scored where seen.insert(text).inserted {
+            var candidate = Candidate(text: text, score: score)
+            candidate.firstProbability = first
+            result.append(candidate)
             if result.count == limit { break }
         }
         return result
     }
 
     func provisional() -> [Candidate] {
-        var scored = finished.compactMap { entry in text(of: entry).map { ($0, score(entry.path)) } }
+        var scored = finished.compactMap { entry in text(of: entry).map { ($0, score(entry.path), entry.first) } }
         for beam in pending {
             let text = TextRules.trimmingTrailingWhitespace(TextRules.trimmingPartialWord(text(of: beam)))
-            if TextRules.hasWordCharacter(text) { scored.append((text, score(beam.path))) }
+            if TextRules.hasWordCharacter(text) { scored.append((text, score(beam.path), beam.firstProbability)) }
         }
         let limit = min(max(request.tuning.maxCandidates, 1), session.maxBeams - 1)
         var seen = Set<String>()
-        return scored.sorted { $0.1 > $1.1 }.filter { seen.insert($0.0).inserted }.prefix(limit).map { Candidate(text: $0.0, score: $0.1) }
+        return scored.sorted { $0.1 > $1.1 }.filter { seen.insert($0.0).inserted }.prefix(limit).map {
+            var candidate = Candidate(text: $0.0, score: $0.1)
+            candidate.firstProbability = $0.2
+            return candidate
+        }
     }
 
     // MARK: Selection
@@ -322,7 +331,10 @@ final class BeamSearch {
     private func expandFree(
         _ beam: Beam, parent: Int, logits: UnsafeBufferPointer<Float>, normalizer: Float, into children: inout [Beam]
     ) {
-        let ranked = LogitMath.topK(logits, k: topK + 16).filter { !vocabulary.isBanned($0.token) }
+        let avoidsTics = request.avoidsTics
+        let ranked = LogitMath.topK(logits, k: topK + 16).filter {
+            !vocabulary.isBanned($0.token) && !(avoidsTics && vocabulary.isTic($0.token))
+        }
         guard let best = ranked.first else { return }
         let bestProbability = exp(Double(best.logit - normalizer))
         let ratio = request.textAfter.isEmpty ? request.tuning.confidenceRatio : request.tuning.midLineConfidenceRatio
@@ -366,6 +378,7 @@ final class BeamSearch {
             var child = beam.extended(with: token, piece: piece, logprob: logprob, parent: parent)
             child.probabilitySum += exp(logprob)
             child.probabilityCount += 1
+            if beam.tokens.isEmpty { child.firstProbability = exp(logprob) }
             guard admit(&child, parent: beam, parentFinished: &parentFinished) else { continue }
             children.append(child)
             kept += 1
@@ -386,6 +399,9 @@ final class BeamSearch {
             }
         }
         options.sort { $0.logit > $1.logit }
+        // Share of the model's probability on tokens that fit what was typed; the first token's
+        // probability is taken within it, so a half-typed word does not read as low confidence.
+        let fitting = beam.tokens.isEmpty ? options.reduce(0.0) { $0 + exp(Double($1.logit - normalizer)) } : 0
         var parentFinished = false
         for option in options.prefix(topK) {
             let piece = vocabulary.piece(option.token)
@@ -393,6 +409,7 @@ final class BeamSearch {
             if overflow.contains(Self.newline) { continue }
             let logprob = Double(option.logit - normalizer)
             var child = beam.extended(with: option.token, piece: piece, logprob: logprob, parent: parent)
+            if beam.tokens.isEmpty, fitting > 0 { child.firstProbability = exp(logprob) / fitting }
             if !overflow.isEmpty {
                 child.probabilitySum += exp(logprob)
                 child.probabilityCount += 1
@@ -414,11 +431,11 @@ final class BeamSearch {
         }
         child.pendingSentenceEnd = false
         if let stop = stopIndex(in: text) {
-            record(String(text[..<stop]), path: child.path)
+            record(String(text[..<stop]), path: child.path, first: child.firstProbability)
             return false
         }
         if request.tuning.blocksEchoes, let start = TextRules.echoStart(text, source: echoSource, sourceGrams: echoGrams) {
-            if !inline { record(TextRules.trimmingToBoundary(String(text[..<start])), path: parent.path) }
+            if !inline { record(TextRules.trimmingToBoundary(String(text[..<start])), path: parent.path, first: parent.firstProbability) }
             return false
         }
         guard inline else { return true }
@@ -436,13 +453,72 @@ final class BeamSearch {
         }
     }
 
+    /// Undertow's personal model: p(t) = (1 - lambda) * model(t) + personal(t), where `personal` puts
+    /// weight on finishing a name or jargon word the person uses and on the word they usually write next.
     private func applyBias(to row: UnsafeMutablePointer<Float>, for beam: Beam) {
         guard let bias = request.bias, bias.strength != 0, beam.remaining(required).allSatisfy({ $0 == Self.space }) else { return }
-        let recent = prompt.tail + TextRules.decodeComplete(beam.bytes)
-        guard let word = TextRules.lastWord(of: recent), let followers = bias.followers[word.lowercased()] else { return }
-        for (follower, weight) in followers {
-            guard let token = session.firstToken(of: follower) else { continue }
-            row[Int(token)] += Float(bias.strength * log1p(weight))
+        let pull = Float(bias.strength)
+        func ws(_ b: UInt8) -> Bool { b == 32 || b == 10 || b == 9 }
+        let text = Array(prompt.body.suffix(48)) + beam.bytes
+        var i = text.count
+        while i > 0, !ws(text[i - 1]) { i -= 1 }
+        let current = text[i...]
+        var j = i
+        while j > 0, ws(text[j - 1]) { j -= 1 }
+        var k = j
+        while k > 0, !ws(text[k - 1]) { k -= 1 }
+        func key(_ bytes: ArraySlice<UInt8>) -> String {
+            String(decoding: bytes, as: UTF8.self).lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" }
+        }
+        var mass: [Int32: Float] = [:]
+        var lambda: Float = 0
+        var damp: [Int32] = []
+
+        // Finishing the current word. Weight = share of this person's words with this prefix that are
+        // names or jargon, so "Kav" -> Kavitha is near-certain while "th" stays the model's.
+        if current.count >= 2 {
+            var all: Float = 0, rare: Float = 0
+            var hits: [(rest: [UInt8], count: Float)] = []
+            for word in bias.words where word.bytes.starts(with: current) {
+                all += word.count
+                if word.unusual, word.bytes.count > current.count {
+                    rare += word.count
+                    hits.append((Array(word.bytes[current.count...]), word.count))
+                }
+            }
+            if rare > 0 {
+                let weight = min(0.95, pull * 0.92 * rare / (all + 1.5))
+                for hit in hits {
+                    // The longest token that is a prefix of what is left of the word.
+                    let options = vocabulary.tokens(satisfying: hit.rest, limit: .max) ?? []
+                    let best = options.filter { vocabulary.piece($0).count <= hit.rest.count }
+                        .max { vocabulary.piece($0).count < vocabulary.piece($1).count }
+                    if let best { mass[best, default: 0] += weight * hit.count / rare }
+                }
+                lambda += weight
+            }
+        }
+
+        // Starting the next word, given the one before it.
+        let bare = text.last.map(ws) ?? true
+        let previous = bare ? key(text[k..<j]) : key(current)
+        if !previous.isEmpty {
+            for (word, p) in bias.followers[previous] ?? [:] {
+                guard let token = session.firstToken(of: word, spaced: !bare) else { continue }
+                mass[token, default: 0] += pull * 0.5 * Float(p)
+                lambda += pull * 0.5 * Float(p)
+            }
+            for word in bias.rejected[previous] ?? [] {
+                if let token = session.firstToken(of: word, spaced: !bare) { damp.append(token) }
+            }
+        }
+        lambda = min(lambda, 0.95)
+        for token in damp { row[Int(token)] -= 2.5 }
+        guard !mass.isEmpty else { return }
+        let normalizer = LogitMath.logSumExp(UnsafeBufferPointer(start: row, count: vocabulary.count), scratch: session.scratch)
+        for (token, m) in mass where !vocabulary.isBanned(token) && !vocabulary.isEndOfGeneration(token) {
+            let p = exp(row[Int(token)] - normalizer)
+            row[Int(token)] = normalizer + log(p + m / (1 - lambda))
         }
     }
 
@@ -488,13 +564,13 @@ final class BeamSearch {
         guard beam.remaining(required).isEmpty else { return }
         let text = TextRules.decodeComplete(beam.bytes.dropFirst(required.count) + extra)
         let path = extraLogprob.map { beam.path.appending(end: beam.bytes.count + extra.count, logprob: $0) } ?? beam.path
-        record(trim ? TextRules.trimmingPartialWord(text) : text, path: path, parked: parked)
+        record(trim ? TextRules.trimmingPartialWord(text) : text, path: path, parked: parked, first: beam.firstProbability)
     }
 
-    private func record(_ text: String, path: ScoredPath, parked: Int? = nil) {
+    private func record(_ text: String, path: ScoredPath, parked: Int? = nil, first: Double) {
         let text = TextRules.trimmingTrailingWhitespace(inline ? text : TextRules.truncatingAtRepeatedLine(text))
         guard TextRules.hasWordCharacter(text) else { return }
-        finished.append(FinishedText(bytes: required + Array(text.utf8), path: path, parked: parked))
+        finished.append(FinishedText(bytes: required + Array(text.utf8), path: path, parked: parked, first: first))
     }
 
     // MARK: Scoring and text

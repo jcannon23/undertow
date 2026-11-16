@@ -23,6 +23,9 @@ let personalArg = opt("--personal")  // comma-separated words to boost
 let nextArg = opt("--next")  // word:delta,word:delta for the first predicted word
 let verbose = flag("--verbose")
 let showTemplate = flag("--template")
+let setPath = opt("--set")  // JSON lines: {"before": …, "truth": …, "screen": …}
+let useScreen = flag("--screen")  // put each row's "screen" text in the prompt as window context
+let trainPath = opt("--train")  // passages of one person's earlier writing; builds their word model
 guard let modelPath = args.first else { print("usage: bench <model.gguf> [options]"); exit(2) }
 
 let engine = LlamaEngine()
@@ -48,12 +51,38 @@ for item in (opt("--reject") ?? "").split(separator: ",") {
     let a = item.split(separator: ">")
     lm.rejected[String(a[0]), default: []].insert(String(a[1]))
 }
+if let trainPath {
+    // The same counting the app does, minus the spell checker: a word seen twice that is
+    // capitalised or long and rare counts as the person's own vocabulary.
+    let text = try String(contentsOfFile: trainPath, encoding: .utf8)
+    var uni: [String: Int] = [:], prevCount: [String: Int] = [:], pairs: [String: [String: Int]] = [:]
+    for passage in text.components(separatedBy: "\n---\n") {
+        var prev = ""
+        for w in passage.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") }) {
+            uni[String(w), default: 0] += 1
+            if !prev.isEmpty { prevCount[prev, default: 0] += 1; pairs[prev, default: [:]][String(w), default: 0] += 1 }
+            prev = w.lowercased()
+        }
+    }
+    for (w, c) in uni {
+        let proper = w.first!.isUppercase && uni[w.lowercased()] == nil && w.count >= 3
+        lm.words.append(.init(text: w, count: c, unusual: c >= 2 && proper))
+    }
+    for (prev, nexts) in pairs {
+        let total = Float(prevCount[prev] ?? 1)
+        for (w, c) in nexts where c >= 2 { lm.followers[prev, default: []].append((w, Float(c) / total)) }
+    }
+    print("trained on \(uni.count) distinct words, \(lm.words.filter(\.unusual).count) personal, \(lm.followers.count) follower lists")
+}
 engine.setPersonalLM(lm)
 if verbose { engine.trace = { print("  ·", $0) } }
+var screen = ""
 func request(_ before: String) -> Completion {
     guard let (stem, cons) = Prompt.split(before) else { return Completion(done: true) }
     var r = CompletionRequest()
-    r.header = Prompt.header(style, Prompt.Context(app: appName), family: family)
+    var ctx = Prompt.Context(app: appName)
+    ctx.screen = screen
+    r.header = Prompt.header(style, ctx, family: family)
     r.stem = stem; r.constraint = cons
     r.maxTokens = maxTokens; r.minProb = minProb; r.minFirstProb = minFirst
     return engine.completeSync(r)
@@ -71,16 +100,27 @@ let corpusPath = URL(fileURLWithPath: #filePath).deletingLastPathComponent().app
 let passages = try String(contentsOf: corpusPath, encoding: .utf8)
     .components(separatedBy: "\n---\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.prefix(limit)
 
+struct Row: Decodable { var before: String; var truth: String; var screen: String? }
+var rows: [Row] = passages.map { Row(before: String($0.prefix(12)), truth: String($0.dropFirst(12)), screen: nil) }
+if let setPath {
+    rows = try String(contentsOfFile: setPath, encoding: .utf8).split(separator: "\n").prefix(limit)
+        .map { try JSONDecoder().decode(Row.self, from: Data($0.utf8)) }
+}
 var chars = 0, keys = 0, right = 0, wrong = 0, blank = 0
 var lat: [Double] = [], first: [Double] = []
-for text in passages {
-    var typed = String(text.prefix(12))
+for row in rows {
+    let text = row.before + row.truth
+    screen = useScreen ? (row.screen ?? "") : ""
+    var typed = row.before
     var sugg = ""
     var trace = typed
     while typed.count < text.count {
         if sugg.isEmpty {
             let c = request(typed)
-            lat.append(c.ms); first.append(c.firstMs > 0 ? c.firstMs : c.ms)
+            lat.append(c.ms)
+            #if !OLD
+            first.append(c.firstMs > 0 ? c.firstMs : c.ms)
+            #endif
             sugg = c.text
             if sugg.isEmpty { blank += 1 }
         }
@@ -97,7 +137,7 @@ for text in passages {
             if sugg.first == ch { sugg.removeFirst() } else { sugg = "" }
         }
     }
-    chars += text.count - 12
+    chars += row.truth.count
     if verbose { print(trace, "\n") }
 }
 lat.sort()

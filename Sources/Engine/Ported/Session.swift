@@ -225,10 +225,12 @@ final class Session {
         rootVersion += 1
     }
 
-    func firstToken(of word: String) -> Int32? {
-        if let cached = firstTokens[word] { return cached }
-        let token = vocabulary.tokenize(" " + word, addSpecial: false).first
-        firstTokens[word] = token
+    /// The token that starts `word`: with its leading space, or bare when the space is already written.
+    func firstToken(of word: String, spaced: Bool = true) -> Int32? {
+        let text = spaced ? " " + word : word
+        if let cached = firstTokens[text] { return cached }
+        let token = vocabulary.tokenize(text, addSpecial: false).first
+        firstTokens[text] = token
         return token
     }
 }

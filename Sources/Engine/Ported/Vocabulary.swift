@@ -110,6 +110,17 @@ final class LlamaVocabulary: TokenCounting, @unchecked Sendable {
     func isEndOfGeneration(_ token: Int32) -> Bool { flags[Int(token)] == Self.endOfGeneration }
     func isBanned(_ token: Int32) -> Bool { flags[Int(token)] == Self.banned }
 
+    private static let ticCharacters = Set("\u{2018}\u{2019}\u{201C}\u{201D}\u{2014}\u{2013}\u{2026}*[]#_`{}<>|~^\\".unicodeScalars)
+
+    static func hasTic(_ text: some StringProtocol) -> Bool {
+        text.contains("..") || text.unicodeScalars.contains { ticCharacters.contains($0) || $0.properties.isEmojiPresentation }
+    }
+
+    /// Built on first use; read only on the engine's queue.
+    private lazy var tics: [Bool] = (0..<count).map { Self.hasTic(pieceText(Int32($0))) }
+
+    func isTic(_ token: Int32) -> Bool { tics[Int(token)] }
+
     func tokens(satisfying required: [UInt8], limit: Int) -> [Int32]? {
         guard !required.isEmpty else { return nil }
         let longer = range(of: required[...], prefixOnly: true)

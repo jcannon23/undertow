@@ -10,15 +10,15 @@ struct CompletionRequest {
     var maxTokens = 20
     /// Kept for the benchmark's command line; the beam search has its own floor.
     var minProb: Float = 0.10
-    /// Not applied: the beam search scores whole phrases, on a different scale, and has its own floor.
+    /// Show nothing at all if the first predicted token is below this.
     var minFirstProb: Float = 0.0
 
     /// The beam search counts words, not tokens.
     var maxWords: Int { maxTokens <= 10 ? 2 : maxTokens <= 20 ? 4 : 7 }
 }
 
-/// A tiny language model of one person's writing, trained by counting. Its "what follows what"
-/// table is handed to the beam search as a bias on the next word.
+/// A tiny language model of one person's writing, trained by counting. It is blended into the
+/// beam search's probabilities, weighted by how much evidence it has at this exact spot.
 struct PersonalLM {
     struct Word { var text: String; var count: Int; var unusual: Bool }
     /// Every word the user has written. `unusual` marks names and jargon the big model can't know.
@@ -34,7 +34,7 @@ struct PersonalLM {
 
 struct Completion {
     var text = ""  // ghost text: continuation after the constraint
-    var confidence: Float = 0  // typical per-token probability of the best candidate
+    var confidence: Float = 0  // probability of the first predicted token
     var done = false
     var ms: Double = 0  // since the request was made
     var firstMs: Double = 0  // when the first usable suggestion arrived
@@ -50,6 +50,7 @@ final class LlamaEngine {
     private let lock = NSLock()
     private var latest = 0
     private var bias: TokenBias?
+    private var biasID = 0
     private(set) var modelName = ""
     private(set) var family = "gemma"
     private(set) var isLoaded = false
@@ -86,12 +87,17 @@ final class LlamaEngine {
     func chatTemplate() -> String { "" }
 
     func setPersonalLM(_ m: PersonalLM) {
+        guard !m.isEmpty, m.strength != 0 else { bias = nil; return }
         var followers: [String: [String: Double]] = [:]
         for (prev, nexts) in m.followers {
-            let turnedDown = m.rejected[prev] ?? []
-            for (word, p) in nexts where !turnedDown.contains(word) { followers[prev, default: [:]][word] = Double(p) }
+            for (word, p) in nexts { followers[prev, default: [:]][word] = Double(p) }
         }
-        bias = followers.isEmpty || m.strength == 0 ? nil : TokenBias(followers: followers, strength: 1.5 * Double(m.strength))
+        var b = TokenBias(followers: followers, strength: Double(m.strength))
+        b.words = m.words.map { .init(bytes: Array($0.text.utf8), count: Float($0.count), unusual: $0.unusual) }
+        b.rejected = m.rejected
+        biasID += 1
+        b.id = biasID
+        bias = b
     }
 
     // MARK: requests
@@ -110,6 +116,8 @@ final class LlamaEngine {
             prompt: r.header + r.stem + space, partialWord: String(r.constraint.dropFirst(space.count)),
             maxWords: maxWords ?? r.maxWords)
         b.bias = bias
+        // Allow a tic only if the person's recent text already uses one.
+        b.avoidsTics = !LlamaVocabulary.hasTic((r.stem + r.constraint).suffix(400))
         return b
     }
 
@@ -119,6 +127,7 @@ final class LlamaEngine {
     func complete(_ req: CompletionRequest, onUpdate: @escaping (Completion) -> Void) -> Int {
         lock.lock(); latest += 1; let id = latest; lock.unlock()
         let subscription = core.suggestions(for: beamRequest(req))
+        let floor = Double(req.minFirstProb)
         Task.detached { [weak self] in
             var finished = false
             var firstMs = 0.0
@@ -126,8 +135,8 @@ final class LlamaEngine {
                 guard let self, self.isCurrent(id) else { return }
                 var c = Completion(done: update.isFinal, ms: update.milliseconds)
                 if let best = update.candidates.first {
-                    c.text = best.text
-                    c.confidence = Float(exp(best.score))
+                    c.confidence = Float(best.firstProbability)
+                    if best.firstProbability >= floor { c.text = best.text }
                     if firstMs == 0 { firstMs = update.milliseconds }
                 }
                 c.firstMs = firstMs
